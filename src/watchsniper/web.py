@@ -385,10 +385,14 @@ def render_catalogue(engine: Engine) -> str:
     observed = engine.db.observed_closings()
 
     def seen(key: str) -> str:
-        median, n = observed.get(key, (0, 0))
+        median, n, _ = observed.get(key, (None, 0, 0))
         if n < C.OBSERVED_MIN_AUCTIONS:
             return ""
         return f"{fmt(median)} <span class='dim'>({n})</span>"
+
+    def unsold(key: str) -> str:
+        n = observed.get(key, (None, 0, 0))[2]
+        return str(n) if n else ""
 
     refs = sorted(
         engine.catalogue.references,
@@ -400,6 +404,7 @@ def render_catalogue(engine: Engine) -> str:
         f"<td class='num'>{fmt(r.point)}</td>"
         f"<td class='num'>{f'{fmt(r.fmv_low)} – {fmt(r.fmv_high)}' if r.is_band else ''}</td>"
         f"<td class='num'>{seen(r.key)}</td>"
+        f"<td class='num'>{unsold(r.key)}</td>"
         f"<td class='num'>{usage.get(r.key, 0)}</td>"
         f"<td class='dim'>{e(r.notes[:120])}</td></tr>"
         for r in refs
@@ -418,7 +423,8 @@ what it would have done to real traffic.</p>
 </div>
 <table><thead><tr><th>Ver.</th><th>Reference</th><th>Key</th>
 <th class="num">FMV</th><th class="num">Band</th>
-<th class="num" title="Median closing price of auctions that closed with bids (count in brackets); blank under the minimum count">Observed</th>
+<th class="num" title="Median closing price of auctions eBay reports as sold (count in brackets); blank under the minimum count">Observed</th>
+<th class="num" title="Auctions that ended without a sale: no bids, or reserve not met">Unsold</th>
 <th class="num">Listings priced</th>
 <th>Notes</th></tr></thead><tbody>{rows}</tbody></table>"""
 

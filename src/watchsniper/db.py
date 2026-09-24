@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS closings (
     final_price_pence INTEGER,
     bid_count         INTEGER NOT NULL DEFAULT 0,
     had_bids          INTEGER NOT NULL,
-    detail            TEXT NOT NULL DEFAULT ''
+    detail            TEXT NOT NULL DEFAULT '',
+    sold              INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS audit (
@@ -166,15 +167,19 @@ class Database:
                 self._conn.execute("DROP TABLE verdicts")
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
-            # The alerted price was added later; older files lack the column.
-            ncols = {
-                r["name"]
-                for r in self._conn.execute("PRAGMA table_info(notifications)")
-            }
-            if "price_pence" not in ncols:
-                self._conn.execute(
-                    "ALTER TABLE notifications ADD COLUMN price_pence INTEGER"
-                )
+            # Columns added after their tables; older files lack them.
+            for table, column in (
+                ("notifications", "price_pence"),
+                ("closings", "sold"),
+            ):
+                existing = {
+                    r["name"]
+                    for r in self._conn.execute(f"PRAGMA table_info({table})")
+                }
+                if column not in existing:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} INTEGER"
+                    )
             self._conn.commit()
 
     def close(self) -> None:
@@ -364,32 +369,40 @@ class Database:
         )
         return {r["catalogue_key"]: r["n"] for r in rows}
 
-    def observed_closings(self) -> dict[str, tuple[int, int]]:
-        """Median closing price and auction count per catalogue entry.
+    def observed_closings(self) -> dict[str, tuple[int | None, int, int]]:
+        """Per catalogue entry: (median sold price, sold count, unsold count).
 
-        Counts only auctions that closed with bids and a GBP price. Listings
-        the blacklist rejects are left out: a bracelet sold alone or a custom
-        dial matches the reference's name but is not the reference. The
-        median of an even count is the lower-rounded mean of the middle two.
+        The median counts only auctions eBay reports as sold with a GBP price;
+        an auction with bids that missed its reserve is unsold. Closings with
+        no sold field (stored before it was recorded) count as neither.
+        Listings the blacklist rejects are left out: a bracelet sold alone or
+        a custom dial matches the reference's name but is not the reference.
+        The median of an even count is the lower-rounded mean of the middle two.
         """
         prices: dict[str, list[int]] = {}
+        unsold: dict[str, int] = {}
         for r in self.query(
-            "SELECT v.catalogue_key, c.final_price_pence FROM closings c"
+            "SELECT v.catalogue_key, c.final_price_pence, c.sold FROM closings c"
             " JOIN verdicts v ON v.item_id = c.item_id"
-            " WHERE c.had_bids = 1 AND c.final_price_pence IS NOT NULL"
+            " WHERE c.sold IS NOT NULL"
             " AND v.catalogue_key <> '' AND v.verdict <> 'REJECT_BLACKLIST'"
         ):
-            prices.setdefault(r["catalogue_key"], []).append(r["final_price_pence"])
-        out = {}
-        for key, values in prices.items():
-            values.sort()
+            key = r["catalogue_key"]
+            if not r["sold"]:
+                unsold[key] = unsold.get(key, 0) + 1
+            elif r["final_price_pence"] is not None:
+                prices.setdefault(key, []).append(r["final_price_pence"])
+        out: dict[str, tuple[int | None, int, int]] = {}
+        for key in prices.keys() | unsold.keys():
+            values = sorted(prices.get(key, []))
             mid = len(values) // 2
-            median = (
-                values[mid]
-                if len(values) % 2
-                else (values[mid - 1] + values[mid]) // 2
-            )
-            out[key] = (median, len(values))
+            if not values:
+                median = None
+            elif len(values) % 2:
+                median = values[mid]
+            else:
+                median = (values[mid - 1] + values[mid]) // 2
+            out[key] = (median, len(values), unsold.get(key, 0))
         return out
 
     def unmatched_titles(self) -> list[str]:
@@ -540,13 +553,17 @@ class Database:
         item_id: str,
         final_price: int | None,
         bid_count: int,
+        sold: bool | None,
         detail: str = "",
     ) -> None:
         self.execute(
-            "INSERT OR REPLACE INTO closings"
-            " (item_id,checked_at_utc,final_price_pence,bid_count,had_bids,detail)"
-            " VALUES (?,?,?,?,?,?)",
-            (item_id, _iso(utcnow()), final_price, bid_count, int(bid_count > 0), detail),
+            "INSERT OR REPLACE INTO closings (item_id,checked_at_utc,"
+            "final_price_pence,bid_count,had_bids,sold,detail)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                item_id, _iso(utcnow()), final_price, bid_count,
+                int(bid_count > 0), None if sold is None else int(sold), detail,
+            ),
         )
 
     def all_listings(self) -> list[sqlite3.Row]:

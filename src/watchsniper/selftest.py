@@ -739,13 +739,16 @@ class TestClosings(unittest.TestCase):
 
         return Engine(self.db, client).record_closings()
 
-    def item(self, value: str, bids):
-        return {
+    def item(self, value: str, bids, sold: int | None = None):
+        row = {
             "buyingOptions": ["AUCTION"],
             "price": {"value": value, "currency": "GBP"},
             "currentBidPrice": {"value": value, "currency": "GBP"},
             "bidCount": bids,
         }
+        if sold is not None:
+            row["estimatedAvailabilities"] = [{"estimatedSoldQuantity": sold}]
+        return row
 
     def closings(self) -> dict:
         return {r["item_id"]: dict(r) for r in self.db.query("SELECT * FROM closings")}
@@ -755,8 +758,8 @@ class TestClosings(unittest.TestCase):
 
         client = _FakeItemClient(
             {
-                "sold": self.item("344.20", 12),
-                "unbid": self.item("299.00", None),
+                "sold": self.item("344.20", 12, sold=1),
+                "unbid": self.item("299.00", None, sold=0),
                 "gone": EbayError("not found", 404, ""),
                 "flaky": EbayError("server error", 503, ""),
             }
@@ -766,11 +769,43 @@ class TestClosings(unittest.TestCase):
         self.assertEqual(got["sold"]["final_price_pence"], 34420)
         self.assertEqual(got["sold"]["bid_count"], 12)
         self.assertEqual(got["sold"]["had_bids"], 1)
+        self.assertEqual(got["sold"]["sold"], 1)
         self.assertEqual(got["unbid"]["had_bids"], 0)
+        self.assertEqual(got["unbid"]["sold"], 0)
         self.assertIsNone(got["gone"]["final_price_pence"])
+        self.assertIsNone(got["gone"]["sold"])
         self.assertNotIn("flaky", got)  # retried next sweep
         self.assertNotIn("too_soon", got)  # inside CLOSING_CHECK_DELAY
         self.assertNotIn("bin", client.fetched)  # Buy It Now is ignored
+
+    def test_bids_without_a_sale_is_unsold_and_missing_field_is_unknown(self):
+        client = _FakeItemClient(
+            {"sold": self.item("300.00", 4, sold=0), "unbid": self.item("1.00", None),
+             "gone": self.item("1.00", None), "flaky": self.item("1.00", None)}
+        )
+        self.run_closings(client)
+        got = self.closings()
+        self.assertEqual((got["sold"]["had_bids"], got["sold"]["sold"]), (1, 0))
+        self.assertIsNone(got["unbid"]["sold"])
+
+    def test_old_closings_table_gains_the_sold_column(self):
+        import sqlite3
+
+        from .db import Database
+
+        path = Path(self.tmp.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.execute(
+            "CREATE TABLE closings (item_id TEXT PRIMARY KEY, checked_at_utc TEXT"
+            " NOT NULL, final_price_pence INTEGER, bid_count INTEGER NOT NULL"
+            " DEFAULT 0, had_bids INTEGER NOT NULL, detail TEXT NOT NULL DEFAULT '')"
+        )
+        old.commit()
+        old.close()
+        db = Database(path)
+        cols = {c["name"] for c in db.query("PRAGMA table_info(closings)")}
+        self.assertIn("sold", cols)
+        db.close()
 
     def test_each_auction_is_fetched_once(self):
         client = _FakeItemClient(
@@ -818,21 +853,27 @@ class TestDashboard(unittest.TestCase):
         )
         self.assertEqual(len(self.db.feed(verdict="all")), 4)
 
-    def test_observed_median_counts_only_auctions_with_bids(self):
+    def test_observed_median_counts_only_sold_auctions(self):
         prices = {"a": "300.00", "b": "340.00", "c": "320.00", "d": "360.00"}
         for item_id, value in prices.items():
             self.add(item_id, is_auction=True)
-            self.db.save_closing(item_id, parse_gbp(value), 5)
+            self.db.save_closing(item_id, parse_gbp(value), 5, True)
         self.add("nobids", is_auction=True)
-        self.db.save_closing("nobids", parse_gbp("100.00"), 0)
+        self.db.save_closing("nobids", parse_gbp("100.00"), 0, False)
+        self.add("reserve", is_auction=True)
+        self.db.save_closing("reserve", parse_gbp("150.00"), 6, False)
+        self.add("legacy", is_auction=True)
+        self.db.save_closing("legacy", parse_gbp("900.00"), 6, None)
         self.add(
             "strap", is_auction=True,
             title="Tissot PRX Powermatic 80 bracelet for 40mm",
         )
-        self.db.save_closing("strap", parse_gbp("50.00"), 3)
+        self.db.save_closing("strap", parse_gbp("50.00"), 3, True)
         key = self.engine.valuer.assess(listing()).catalogue_key
-        # even count: lower-rounded mean of 320 and 340
-        self.assertEqual(self.db.observed_closings()[key], (parse_gbp("330.00"), 4))
+        # even count: lower-rounded mean of 320 and 340; two unsold
+        self.assertEqual(
+            self.db.observed_closings()[key], (parse_gbp("330.00"), 4, 2)
+        )
 
     def test_catalogue_page_hides_observed_under_the_minimum(self):
         from . import web
@@ -840,12 +881,18 @@ class TestDashboard(unittest.TestCase):
         key = self.engine.valuer.assess(listing()).catalogue_key
         for i in range(C.OBSERVED_MIN_AUCTIONS - 1):
             self.add(f"x{i}", is_auction=True)
-            self.db.save_closing(f"x{i}", parse_gbp("123.45"), 2)
+            self.db.save_closing(f"x{i}", parse_gbp("123.45"), 2, True)
         self.assertEqual(self.db.observed_closings()[key][1], C.OBSERVED_MIN_AUCTIONS - 1)
         self.assertNotIn("£123.45", web.render_catalogue(self.engine))
         self.add("last", is_auction=True)
-        self.db.save_closing("last", parse_gbp("123.45"), 2)
+        self.db.save_closing("last", parse_gbp("123.45"), 2, True)
         self.assertIn("£123.45", web.render_catalogue(self.engine))
+
+    def test_unsold_only_entry_shows_its_unsold_count(self):
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        self.add("u", is_auction=True)
+        self.db.save_closing("u", parse_gbp("99.00"), 0, False)
+        self.assertEqual(self.db.observed_closings()[key], (None, 0, 1))
 
 
 class TestAuctionPaging(unittest.TestCase):

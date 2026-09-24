@@ -182,6 +182,10 @@ class Engine:
         a sweep happened to see. An auction with no bids reports its starting
         price and a null bid count; it is stored with `had_bids` false.
 
+        `sold` is eBay's `estimatedSoldQuantity` > 0. It is what separates a
+        sale from an auction that drew bids but missed its reserve. When the
+        field is absent it is stored as unknown, not as unsold.
+
         A 404 is stored with no price so it is not retried. Any other failure
         leaves the auction pending for the next sweep. BudgetExhausted
         propagates to the sweep, which records it.
@@ -197,15 +201,18 @@ class Engine:
                 raise
             except EbayError as exc:
                 if exc.status == 404:
-                    self.db.save_closing(item_id, None, 0, "HTTP 404")
+                    self.db.save_closing(item_id, None, 0, None, "HTTP 404")
                     done += 1
                 continue
             final = from_item_summary(row)
             price = final.price if final.currency == "GBP" else None
+            availability = (row.get("estimatedAvailabilities") or [{}])[0]
+            sold_qty = availability.get("estimatedSoldQuantity")
             self.db.save_closing(
                 item_id,
                 price,
                 final.bid_count or 0,
+                None if sold_qty is None else int(sold_qty) > 0,
                 "" if price is not None else f"no GBP price ({final.currency or 'none'})",
             )
             done += 1
