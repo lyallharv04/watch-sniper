@@ -1,0 +1,31 @@
+[project]
+name = "watchsniper"
+version = "3.0.0"
+description = "Read-only UK-domestic eBay watch feed. Holds no user OAuth token."
+requires-python = ">=3.11"
+
+# No runtime dependencies. The whole service is urllib, sqlite3, ssl,
+# http.server, tomllib, threading and re. See DECISIONS.md A1.
+dependencies = []
+
+[project.optional-dependencies]
+# Needed only on a network that intercepts TLS, where OpenSSL rejects the
+# re-signed chain that the OS trust store accepts. See DECISIONS.md A16.
+tls-inspection = ["truststore>=0.9"]
+
+[project.scripts]
+watchsniper = "watchsniper.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

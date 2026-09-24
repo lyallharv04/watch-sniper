@@ -1,0 +1,121 @@
+########################################################################
+#  Blacklist regression corpus.
+#
+#  `drop = true`  means the blacklist SHOULD fire on this title.
+#  `drop = false` means it must NOT — these are the false positives, and they
+#  are the reason the matcher is negation-aware at all.
+#
+#  The entries below the marker are seeds carried over from the previous
+#  attempt: real titles, or minimal reproductions of real failures. Everything
+#  ADDED from here on should come from a listing the operator actually
+#  labelled in the dashboard as a bad rejection or a bad pass. A hand-authored
+#  corpus measures the author's imagination; a corpus grown from labelled
+#  traffic measures the system.
+########################################################################
+
+[[case]]
+title = "Hamilton Khaki Field Mechanical 38mm - water resistance untested"
+drop = false
+why = "THE critical false positive. Boilerplate on most vintage listings."
+
+[[case]]
+title = "Vintage Seiko - untested, sold as seen"
+drop = true
+why = "Bare untested means the movement."
+
+[[case]]
+title = "Genuine Tissot PRX Powermatic 80 - not a replica, receipt included"
+drop = false
+why = "'not a replica' contains 'replica'."
+
+[[case]]
+title = "Tissot PRX replica dial fitted, runs well"
+drop = true
+why = ""
+
+[[case]]
+title = "Christopher Ward C60 Trident Pro 600 homage by Pagani"
+drop = true
+why = ""
+
+[[case]]
+title = "Christopher Ward BX149 C60 Trident Pro 600 42mm Bader bracelet- used"
+drop = true
+why = "A bracelet sold alone. It was every single alert in the first pre-flight run, priced as a GBP 500 watch."
+
+[[case]]
+title = "Christopher Ward C60 Trident Pro 600 with Bader bracelet, full set"
+drop = false
+why = "A genuine watch that merely mentions its bracelet."
+
+[[case]]
+title = "Steel bracelet for Tissot PRX 40mm, 12mm lug"
+drop = true
+why = ""
+
+[[case]]
+title = "Hamilton Khaki Field - strap only, no watch"
+drop = true
+why = ""
+
+[[case]]
+title = "Seiko Alpinist SPB121 - dial has been refinished"
+drop = true
+why = "Word order the corpus caught being missed."
+
+[[case]]
+title = "Seiko Alpinist SPB121 - dial is original, unpolished case"
+drop = false
+why = ""
+
+[[case]]
+title = "Farer Lander GMT, broken clasp otherwise perfect"
+drop = false
+why = "A broken clasp is a service item, not a reject."
+
+[[case]]
+title = "Baltic Aquascaphe - broken, does not run"
+drop = true
+why = ""
+
+[[case]]
+title = "Hamilton Khaki Field - not running fast or slow, keeps great time"
+drop = false
+why = "The literal reading is the opposite of the meaning."
+
+[[case]]
+title = "Sinn 556 I spares or repairs"
+drop = true
+why = ""
+
+[[case]]
+title = "Vintage Seiko 6309 Mumbai Special orange dial"
+drop = true
+why = ""
+
+[[case]]
+title = "Christopher Ward C65 Trident, aftermarket strap fitted, original included"
+drop = false
+why = "An aftermarket STRAP is priced through BRACELET_MULT, not rejected. Only an aftermarket dial, hands, bezel, insert or movement drops."
+
+[[case]]
+title = "Tissot PRX with aftermarket dial"
+drop = true
+why = ""
+
+# --- from live traffic, 2026-09-04 --------------------------------------
+
+[[case]]
+title = "Tissot Prx Powermatic 80 Custom Tiffany Dial-Unique Piece- NO RESERVE"
+drop = true
+why = "Surfaced as actionable on the first live run. A custom dial is a different object, not a discounted PRX."
+
+[[case]]
+title = "Tissot PRX Mint Green \"Tiffany\" 40mm Genuine Swiss Made Watch Men"
+drop = false
+why = "A factory colourway that mentions Tiffany. Must survive the custom_dial rule."
+
+[[case]]
+title = "Christopher Ward C60 Trident Mk3 Pro 300 42mm Pool Blue"
+drop = false
+why = "Genuine watch. Kept here because the generation marker 'Mk3' between the model words broke catalogue matching, and this title is the regression guard for that."

@@ -1,0 +1,32 @@
+[Unit]
+Description=watch sniper — read-only eBay UK watch feed
+Documentation=file:///opt/watchsniper/docs/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=CHANGEME
+WorkingDirectory=/opt/watchsniper
+Environment=PYTHONPATH=/opt/watchsniper/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m watchsniper serve
+Restart=always
+RestartSec=15
+
+# The process reads listings and writes one SQLite file. It has no reason to
+# touch anything else, and it holds no credential that can spend money — but a
+# read-only feed with a wide blast radius is still a wide blast radius.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/watchsniper
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

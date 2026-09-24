@@ -1,0 +1,129 @@
+########################################################################
+#  Negation-aware blacklist.
+#
+#  Naive substring matching fails in BOTH directions, and this is the most
+#  likely source of silent quality failure in the whole system:
+#
+#      "water resistance untested"  is boilerplate on most vintage listings
+#                                   and must NOT drop them
+#      "not a replica"              contains `replica` and must NOT drop
+#      "replica dial fitted"        must drop
+#
+#  So every rule carries explicit negation patterns. A hit is discarded when
+#  any negation matches within `window_chars` either side of it.
+#
+#  When the dashboard tells you a rejection was wrong, add the listing title to
+#  tests/corpus.toml with the verdict it should have had, then fix the rule.
+#  The corpus is a build gate: `python -m watchsniper test` fails on a
+#  regression. Do not hand-author corpus entries — they should come from real
+#  traffic you have actually labelled, which is the only way the precision and
+#  recall figures mean anything.
+########################################################################
+
+window_chars = 40
+
+[[rule]]
+id = "replica"
+pattern = '\breplicas?\b'
+negations = [
+  '\b(not|isn.?t|is\s+not|never|no)\s+(a\s+)?(cheap\s+|chinese\s+)?replica',
+  '\bgenuine\b[^.]{0,20}\bnot\s+(a\s+)?replica',
+  '\breplica\s+(free|hunters?)\b',
+]
+notes = "Sellers of genuine pieces frequently write 'not a replica' defensively."
+
+[[rule]]
+id = "homage"
+pattern = '\bhomage\b'
+negations = ['\b(not|isn.?t|is\s+not|no)\s+(a\s+|an\s+)?homage']
+notes = "Homages have no arbitrage value at these price points."
+
+[[rule]]
+id = "aftermarket_dial"
+pattern = '\baftermarket\s+(dial|hands|bezel|insert|movement)\b'
+negations = [
+  '\bno\s+aftermarket\b',
+  '\b(not|isn.?t|is\s+not)\s+aftermarket\b',
+  '\bzero\s+aftermarket\b',
+]
+notes = "An aftermarket dial destroys resale value. An aftermarket STRAP does not — that is priced through BRACELET_MULT instead, so this rule deliberately does not match 'aftermarket strap'."
+
+[[rule]]
+id = "redial"
+pattern = '\b(re-?dial(?:led|ed)?|(?:refinished|repainted|reprinted|restored)\s+dial|dial\b[^.]{0,20}\b(?:refinished|repainted|reprinted|redone))\b'
+negations = ['\b(not|never)\s+re-?dial', '\bdial\s+(is\s+)?original\b']
+notes = "Must match both word orders — 'refinished dial' and 'dial has been refinished'. The corpus caught the second being missed."
+
+[[rule]]
+id = "for_parts"
+pattern = '\b(for\s+parts|spares?\s+or\s+repairs?|parts\s+only|not\s+working)\b'
+negations = ['\b(not|isn.?t)\s+for\s+parts\b']
+notes = "Non-running or defective is always a reject, never a bid."
+
+[[rule]]
+id = "untested"
+pattern = '\buntested\b'
+negations = [
+  '\b(water|waterproof|water[\s-]?resistan\w*|pressure|seals?|depth|wr)\b[^.]{0,25}\buntested\b',
+  '\buntested\b[^.]{0,25}\bfor\s+(water|waterproof|water[\s-]?resistance|pressure)\b',
+  '\buntested\s+for\s+accuracy\s+only\b',
+]
+notes = "THE critical false positive. 'Water resistance untested' appears on a large share of legitimate vintage listings. Bare 'untested', meaning the movement, still drops."
+
+[[rule]]
+id = "not_running"
+pattern = '\b(not\s+running|does\s+not\s+run|won.?t\s+run|stopped\s+working|dead\s+watch)\b'
+negations = ['\bnot\s+running\s+(fast|slow|fast\s+or\s+slow)\b', '\bis\s+running\b']
+notes = "'Not running fast or slow' means it keeps good time — the opposite of the literal reading."
+
+[[rule]]
+id = "broken"
+pattern = '\bbroken\b'
+negations = [
+  '\bbroken\s+(in|links?|strap|bracelet|buckle|box|clasp)\b',
+  '\b(no|not|never|nothing)\s+broken\b',
+  '\bunbroken\b',
+]
+notes = "A broken bracelet or clasp is a service-buffer item. A broken movement is a reject."
+
+[[rule]]
+id = "fake"
+pattern = '\b(fake|counterfeit|knock[\s-]?off)\b'
+negations = [
+  '\b(not|isn.?t|no)\s+(a\s+)?(fake|counterfeit|knock[\s-]?off)\b',
+  '\bfake\s+(free|spotting)\b',
+]
+notes = ""
+
+[[rule]]
+id = "accessory_only"
+pattern = '\b(bracelet|strap|band|bezel|insert|crystal|glass|case ?back|caseback|clasp|buckle|links?|spring ?bars?|dial|hands|movement|box|papers|manual|tool)\b[^.]{0,15}\b(only|alone)\b'
+negations = []
+notes = "'bezel insert only', 'strap only' — an accessory, not a watch."
+
+[[rule]]
+id = "accessory_for"
+pattern = '\b(bracelet|strap|band|bezel|insert|crystal|glass|caseback|clasp|buckle|links?|spring ?bars?)\b\s+(for|to fit|fits|suits|compatible with|replacement for)\b'
+negations = []
+notes = "'Bracelet for Tissot PRX' — the listing is the bracelet."
+
+[[rule]]
+id = "accessory_trailing"
+pattern = '\b(bracelet|strap|band|bezel|clasp|buckle|links?|crystal|caseback)\b[\s\-]*(used|new|only|spare|genuine|oem|boxed)?[\s\-]*$'
+negations = [
+  '\b(with|on|inc|incl|including|plus|and|\+)\s+([\w-]+\s+){0,2}(bracelet|strap|band|bezel|clasp|buckle|links?|crystal|caseback)\b',
+  '\b(bracelet|strap)\s+(included|fitted|attached)\b',
+]
+notes = "Caught a real one. 'Christopher Ward BX149 C60 Trident Pro 600 42mm Bader bracelet- used' is a bracelet sold alone, but the matcher read 'c60 trident pro 600' and valued it as a £500 watch — it was every single alert in the first pre-flight run. The negations keep genuine watches that merely mention their bracelet."
+
+[[rule]]
+id = "mumbai_special"
+pattern = '\bmumbai\s+special\b'
+negations = []
+notes = "Vintage Seiko 6309/7002 with aftermarket coloured dials."
+
+[[rule]]
+id = "custom_dial"
+pattern = '\b(custom|customised|customized|modded|modified|refinished)(\s+\w+){0,2}\s+dial\b'
+negations = ['\b(no|not|never)\s+(custom|modded|modified)\b']
+notes = "Found on live traffic, not invented: 'Tissot Prx Powermatic 80 Custom Tiffany Dial-Unique Piece' was surfaced as actionable. A custom dial is not a discount on a PRX, it is a different and much less liquid object, and the old rule only matched the literal phrase 'custom coloured dial'. The {0,2} span is what lets a colour or brand name sit between the two words."

@@ -1,0 +1,36 @@
+########################################################################
+#  eBay UK bid increment tiers, GBP.
+#
+#  Used only by the auction reachability check: a listing can sit under the
+#  maximum allowable bid and still be unreachable, because the next valid bid
+#  is a whole increment above the current one.
+#
+#  UNVERIFIED. eBay's increment tiers differ per marketplace and currency, and
+#  almost everything published online documents the ebay.com USD table, which
+#  is not this. Transcribe from
+#  https://www.ebay.co.uk/help/buying/bidding/automatic-bidding?id=4014
+#  and set `verified = true` with the date.
+#
+#  Impact if wrong: small and one-directional. An increment that is too small
+#  makes the check marginally optimistic; too large, marginally pessimistic.
+#  On a £200 bid the plausible tables differ by £1-£3, so it only moves a
+#  listing sitting exactly on the boundary.
+########################################################################
+
+verified = false
+verified_on = ""
+source = "pending manual transcription from ebay.co.uk"
+currency = "GBP"
+
+# `to = ""` means no upper bound.
+tier = [
+  { from = "0.01",    to = "0.99",    increment = "0.05" },
+  { from = "1.00",    to = "4.99",    increment = "0.20" },
+  { from = "5.00",    to = "14.99",   increment = "0.50" },
+  { from = "15.00",   to = "59.99",   increment = "1.00" },
+  { from = "60.00",   to = "149.99",  increment = "2.00" },
+  { from = "150.00",  to = "299.99",  increment = "5.00" },
+  { from = "300.00",  to = "599.99",  increment = "10.00" },
+  { from = "600.00",  to = "1499.99", increment = "20.00" },
+  { from = "1500.00", to = "",        increment = "50.00" },
+]

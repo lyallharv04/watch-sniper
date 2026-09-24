@@ -1,0 +1,750 @@
+########################################################################
+#  FMV CATALOGUE — the project's critical path.
+#
+#  Every number in this file is an UNVERIFIED ESTIMATE written by an AI.
+#  None of them is a comp. Until `verified` is flipped on a row, every
+#  valuation derived from it is labelled unverified in the dashboard and in
+#  every notification, and you should treat it as a prompt to look, not as a
+#  price.
+#
+#  WHAT `fmv` MEANS
+#  The realistic UK used sale price achievable within about 30 days for a
+#  MINT / FULL SET / OEM BRACELET example. It is the CEILING. The condition,
+#  scope and bracelet multipliers in config.py only ever adjust downward.
+#
+#  `fmv_low` / `fmv_high` (optional)
+#  Where a title genuinely cannot tell you which variant you are looking at,
+#  give the band instead of pretending to a point. The system values the
+#  pessimistic end for the pass/fail gate and shows you the optimistic end so
+#  you can see the size of the data gap. Omit both when the reference is
+#  unambiguous; they then default to `fmv`.
+#
+#  HOW TO CURATE THIS  (requirement 22 — make it a sitting, not a chore)
+#    1.  `python -m watchsniper catalogue`  prints these rows ordered by how
+#        many real listings each one has actually priced. Work down that list;
+#        the top ten rows cover most of the traffic and the tail can wait.
+#    2.  For each row: find what that reference actually SOLD for on eBay UK in
+#        the last 90 days (signed in, Sold filter), take a median of the
+#        genuine Buy It Now and auction sales, ignore Best Offer rows because
+#        eBay shows the asking price on those and it biases you upward.
+#    3.  Edit `fmv`, set `verified = true`, put the date and your sample size
+#        in `notes`.
+#    4.  `python -m watchsniper rescore`  re-scores every listing already
+#        captured, offline and free. You immediately see what your new number
+#        would have done to two weeks of real traffic.
+#
+#  MATCHING FIELDS
+#    aliases       any one of these appearing in the title makes the entry a
+#                  candidate. Each must be distinctive ON ITS OWN — `integra`
+#                  is a substring of `integrated`, and that once priced a £175
+#                  Tissot as a £520 Farer.
+#    requires_any  if present, at least one must also appear. This is what
+#                  keeps a quartz from being priced as an automatic.
+#    excludes      any one of these appearing disqualifies the entry.
+#    priority      10 = a specific variant. 0 = a catch-all that should only
+#                  win when no variant matched.
+#    synthetic_key = true means `key` is our invention, not a manufacturer
+#                  reference. Declared, never inferred from the string shape:
+#                  Sinn's real `556-I` and our invented `C60-TRIDENT-PRO-300`
+#                  are the same shape and opposite in meaning.
+########################################################################
+
+as_of = "2026-09-04"
+source = "Inherited seed estimates from the V2.0 attempt. Nothing verified."
+
+# ======================================================================
+#  TISSOT — highest measured UK arrival rate (17.7 new listings/day).
+#  Curate these first.
+# ======================================================================
+
+[[reference]]
+key = "T137.407.11.041.00"
+brand = "Tissot"
+model = "PRX Powermatic 80 40mm"
+fmv = "380.00"
+verified = false
+priority = 10
+aliases = ["prx"]
+requires_any = ["powermatic", "automatic", "t137.407", "t137407"]
+excludes = ["quartz", "35mm", "35 mm", "titanium", "chronograph", "digital",
+            "t137.410", "t137410", "t137.210", "t137210", "t137.207", "t137207"]
+notes = "Waffle dial. The single highest confusion risk in the catalogue: the quartz is a sunburst dial at less than half the money, so a title stating neither movement must NOT land here — it falls to PRX-UNSPECIFIED and shows as a data gap."
+
+[[reference]]
+key = "T137.207.11.041.00"
+brand = "Tissot"
+model = "PRX Powermatic 80 35mm"
+fmv = "360.00"
+verified = false
+priority = 10
+aliases = ["prx"]
+requires_any = ["35mm", "35 mm", "t137.207", "t137207"]
+excludes = ["quartz", "titanium", "chronograph", "t137.210", "t137210",
+            "t137.410", "t137410"]
+notes = ""
+
+[[reference]]
+key = "T137.410.11.041.00"
+brand = "Tissot"
+model = "PRX Quartz 40mm"
+fmv = "175.00"
+verified = false
+priority = 10
+aliases = ["prx"]
+requires_any = ["quartz", "t137.410", "t137410"]
+excludes = ["powermatic", "automatic", "35mm", "35 mm", "titanium",
+            "chronograph", "t137.407", "t137407", "t137.207", "t137207",
+            "t137.210", "t137210"]
+notes = "Listed explicitly so a quartz is never priced as a Powermatic."
+
+[[reference]]
+key = "T137.210.11.041.00"
+brand = "Tissot"
+model = "PRX Quartz 35mm"
+fmv = "165.00"
+verified = false
+priority = 10
+aliases = ["prx"]
+requires_any = ["35mm", "35 mm", "t137.210", "t137210"]
+excludes = ["powermatic", "automatic", "titanium", "chronograph",
+            "t137.207", "t137207", "t137.407", "t137407"]
+notes = ""
+
+[[reference]]
+key = "T137.807.44.041.00"
+brand = "Tissot"
+model = "PRX Powermatic 80 38mm Titanium"
+fmv = "420.00"
+verified = false
+priority = 10
+aliases = ["prx"]
+requires_any = ["titanium", "t137.807", "t137807"]
+excludes = ["quartz", "chronograph"]
+notes = ""
+
+[[reference]]
+key = "PRX-CHRONO"
+brand = "Tissot"
+model = "PRX Chronograph"
+fmv = "600.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["prx"]
+requires_any = ["chronograph", "chrono"]
+excludes = ["quartz"]
+notes = "Thin UK supply and near the top of the search band."
+
+[[reference]]
+key = "PRX-DIGITAL"
+brand = "Tissot"
+model = "PRX Digital"
+fmv = "250.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["prx"]
+requires_any = ["digital"]
+excludes = []
+notes = ""
+
+[[reference]]
+key = "PRX-UNSPECIFIED"
+brand = "Tissot"
+model = "PRX (movement not stated)"
+fmv = "260.00"
+fmv_low = "165.00"
+fmv_high = "420.00"
+verified = false
+priority = 0
+synthetic_key = true
+aliases = ["prx"]
+requires_any = []
+excludes = []
+notes = "Catch-all for a title that says PRX and nothing that settles quartz vs Powermatic vs titanium. The band is deliberately enormous — a 2.5x spread is what the listing actually tells you, and the honest output is 'we cannot price this', not a confident midpoint. If these dominate the feed, the fix is to read the photos, not to narrow the band."
+
+# ======================================================================
+#  CHRISTOPHER WARD — 12.2 new listings/day. British, well supplied.
+#  Logo era is the largest single value driver and titles almost never
+#  state it, so the C60 entries carry a band rather than a point.
+# ======================================================================
+
+[[reference]]
+key = "C60-TRIDENT-PRO-300"
+brand = "Christopher Ward"
+model = "C60 Trident Pro 300"
+fmv = "420.00"
+fmv_low = "336.00"
+fmv_high = "525.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["c60 trident", "trident pro"]
+requires_any = ["pro 300"]
+excludes = ["pro 600", "gmt", "atoll", "reef"]
+notes = "Band spans the logo eras: cursive 'Chr. Ward' at the bottom, left-aligned text in the middle, twin-flags applied logo at the top (roughly +25%). Only a photo of the dial settles it, and Phase 1 does not look at photos — see DECISIONS A10. Matching is split alias/requires_any rather than one long alias because real titles interleave a generation marker: 'C60 Trident Mk3 Pro 300' does not contain the substring 'c60 trident pro 300', and eight live listings were unpriced for exactly that reason."
+
+[[reference]]
+key = "C60-TRIDENT-PRO-600"
+brand = "Christopher Ward"
+model = "C60 Trident Pro 600"
+fmv = "500.00"
+fmv_low = "400.00"
+fmv_high = "625.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["c60 trident", "trident pro"]
+requires_any = ["pro 600"]
+excludes = ["pro 300", "gmt", "atoll", "reef"]
+notes = "Logo era band, as C60-TRIDENT-PRO-300. Note the exclude is `pro 300`, not a bare `300` — 'Diver 300m' appears in the titles of 600s."
+
+[[reference]]
+key = "C60-TRIDENT-OTHER"
+brand = "Christopher Ward"
+model = "C60 Trident (Reef / Atoll / non-Pro)"
+fmv = "400.00"
+fmv_low = "320.00"
+fmv_high = "500.00"
+verified = false
+priority = 0
+synthetic_key = true
+aliases = ["c60 trident", "c60 atoll", "c60 reef"]
+requires_any = []
+excludes = ["pro 300", "pro 600", "gmt"]
+notes = "Catch-all for the non-Pro C60 line. Logo era band, as above."
+
+[[reference]]
+key = "C63-SEALANDER-AUTO"
+brand = "Christopher Ward"
+model = "C63 Sealander Automatic"
+fmv = "450.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["c63 sealander", "ward sealander"]
+requires_any = []
+excludes = ["gmt", "chronometer", "lions", "bilbao"]
+notes = "2021 onward, twin-flags logo throughout, so no logo-era band applies."
+
+[[reference]]
+key = "C63-SEALANDER-GMT"
+brand = "Christopher Ward"
+model = "C63 Sealander GMT"
+fmv = "520.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["c63 sealander gmt", "sealander gmt"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "C65-FAMILY"
+brand = "Christopher Ward"
+model = "C65 (Dune / Aquitaine / Trident)"
+fmv = "480.00"
+verified = false
+priority = 0
+synthetic_key = true
+aliases = ["c65"]
+requires_any = []
+excludes = []
+notes = "Twin-flags throughout its production, so logo era cannot move the price."
+
+[[reference]]
+key = "C12-THE-TWELVE"
+brand = "Christopher Ward"
+model = "C12 The Twelve"
+fmv = "550.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["c12", "the twelve", "ward twelve"]
+requires_any = []
+excludes = []
+notes = "2023 onward, twin-flags only. Titanium sells above steel. `ward twelve` is brand-qualified deliberately: a bare `twelve` is an ordinary English word and would match anything."
+
+# ======================================================================
+#  HAMILTON — 7.6 new listings/day.
+# ======================================================================
+
+[[reference]]
+key = "H69439931"
+brand = "Hamilton"
+model = "Khaki Field Mechanical 38"
+fmv = "320.00"
+verified = false
+priority = 10
+aliases = ["h69439931", "khaki field mechanical", "khaki mech",
+           "khaki field hand wound", "khaki field 38 mechanical"]
+requires_any = []
+excludes = ["automatic", "auto", "murph", "king", "expedition", "quartz"]
+notes = "Highest replica volume in the catalogue. On a real one, check the ETA 2801 / H-50 movement finishing and the weight of the inner 24-hour numerals."
+
+[[reference]]
+key = "H70455533"
+brand = "Hamilton"
+model = "Khaki Field Automatic 38"
+fmv = "400.00"
+verified = false
+priority = 10
+aliases = ["h70455533", "khaki field auto", "khaki field automatic"]
+requires_any = ["auto", "automatic"]
+excludes = ["murph", "mechanical", "hand wound", "king", "expedition",
+            "quartz", "42mm", "42 mm"]
+notes = ""
+
+[[reference]]
+key = "H70555533"
+brand = "Hamilton"
+model = "Khaki Field Automatic 42"
+fmv = "380.00"
+verified = false
+priority = 10
+aliases = ["h70555533", "khaki field auto", "khaki field automatic",
+           "khaki automatic"]
+requires_any = ["42mm", "42 mm"]
+excludes = ["murph", "mechanical", "hand wound", "king", "expedition", "quartz"]
+notes = "The larger case sells slightly below the 38mm in the UK."
+
+[[reference]]
+key = "H70605731"
+brand = "Hamilton"
+model = "Khaki Field Murph 38"
+fmv = "560.00"
+verified = false
+priority = 10
+aliases = ["h70605731", "murph"]
+requires_any = []
+excludes = ["king", "expedition"]
+notes = ""
+
+[[reference]]
+key = "H64455523"
+brand = "Hamilton"
+model = "Khaki Field King Automatic 40"
+fmv = "420.00"
+verified = false
+priority = 10
+aliases = ["h64455523", "khaki field king", "khaki king"]
+requires_any = []
+excludes = ["mechanical", "hand wound", "quartz", "murph", "expedition"]
+notes = "Day-date sub-family, distinct from the plain Khaki Field."
+
+[[reference]]
+key = "H70315510"
+brand = "Hamilton"
+model = "Khaki Field Expedition Auto 41"
+fmv = "480.00"
+verified = false
+priority = 10
+aliases = ["h70315510", "khaki field expedition", "khaki expedition"]
+requires_any = []
+excludes = ["quartz", "murph", "king"]
+notes = ""
+
+[[reference]]
+key = "H70205140"
+brand = "Hamilton"
+model = "Khaki Field Titanium"
+fmv = "450.00"
+verified = false
+priority = 10
+aliases = ["h70205140", "khaki field", "khaki"]
+requires_any = ["titanium"]
+excludes = ["quartz", "murph", "king"]
+notes = ""
+
+[[reference]]
+key = "KHAKI-FIELD-QUARTZ"
+brand = "Hamilton"
+model = "Khaki Field Quartz"
+fmv = "190.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["khaki field", "khaki"]
+requires_any = ["quartz"]
+excludes = ["automatic", "mechanical", "murph", "king", "expedition"]
+notes = "Roughly half the mechanical. Listed so it is never valued as one — the same trap as the PRX."
+
+[[reference]]
+key = "KHAKI-FIELD-UNSPECIFIED"
+brand = "Hamilton"
+model = "Khaki Field (variant not stated)"
+fmv = "320.00"
+fmv_low = "190.00"
+fmv_high = "480.00"
+verified = false
+priority = 0
+synthetic_key = true
+aliases = ["khaki field"]
+requires_any = []
+excludes = ["mechanical", "hand wound", "automatic", "auto", "quartz",
+            "murph", "king", "expedition", "titanium"]
+notes = "Most Khaki Field titles name the family and no variant. The movement is what sets the price, so the honest answer is a band from the quartz to the Expedition."
+
+# ======================================================================
+#  SEIKO — 1.0 new listings/day.
+# ======================================================================
+
+[[reference]]
+key = "SARB017"
+brand = "Seiko"
+model = "Alpinist SARB017"
+fmv = "520.00"
+verified = false
+priority = 10
+aliases = ["sarb017", "alpinist sarb"]
+requires_any = []
+excludes = []
+notes = "Discontinued. Green dial, gold indices."
+
+[[reference]]
+key = "SPB143"
+brand = "Seiko"
+model = "62MAS Reissue SPB143"
+fmv = "620.00"
+verified = false
+priority = 10
+aliases = ["spb143", "spb143j1", "62mas"]
+requires_any = []
+excludes = []
+notes = "A 62MAS reissue, NOT an Alpinist — kept separate so the Alpinist family entry never absorbs it."
+
+[[reference]]
+key = "SPB121"
+brand = "Seiko"
+model = "Alpinist (modern SPB line)"
+fmv = "540.00"
+verified = false
+priority = 10
+aliases = ["spb117", "spb121", "spb155", "spb157", "spb159", "spb197",
+           "spb201", "spb210", "spb212", "spb241", "spb243", "spb289",
+           "spb507", "alpinist"]
+requires_any = ["seiko", "prospex"]
+excludes = ["62mas", "spb143", "homage", "sarb017", "szsb", "sbdc"]
+notes = "The modern SPB Alpinists trade within about 10% of each other. `requires_any` is load-bearing: excluding the word 'homage' was not enough, because a clone brand writes 'MilFortic Alpinist Green Sunburst Dial' and never says homage at all."
+
+[[reference]]
+key = "SBDC087"
+brand = "Seiko"
+model = "Alpinist SBDC087 (JDM)"
+fmv = "520.00"
+verified = false
+priority = 10
+aliases = ["sbdc087", "sbdc091"]
+requires_any = []
+excludes = ["homage"]
+notes = "JDM import risk — confirm the seller is genuinely GB-located rather than a grey importer with a GB address."
+
+[[reference]]
+key = "SZSB021"
+brand = "Seiko"
+model = "Alpinist SZSB021 (JDM, 38mm)"
+fmv = "320.00"
+verified = false
+priority = 10
+aliases = ["szsb021", "szsb023"]
+requires_any = []
+excludes = ["homage"]
+notes = ""
+
+# ======================================================================
+#  FARER — 0.7 new listings/day. British, moderate supply.
+# ======================================================================
+
+[[reference]]
+key = "LANDER-GMT"
+brand = "Farer"
+model = "Lander GMT"
+fmv = "520.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["lander gmt", "farer lander"]
+requires_any = []
+excludes = []
+notes = "Check the hands are the original colour-matched set. Aftermarket hands destroy Farer resale demand."
+
+[[reference]]
+key = "COBB-CHRONO"
+brand = "Farer"
+model = "Cobb Chronograph"
+fmv = "480.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["cobb chronograph", "cobb chrono", "farer cobb"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "STANHOPE"
+brand = "Farer"
+model = "Stanhope"
+fmv = "380.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["stanhope"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "PONTING"
+brand = "Farer"
+model = "Ponting"
+fmv = "450.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["ponting"]
+requires_any = []
+excludes = []
+notes = "Original colour-matched hands, as Lander."
+
+[[reference]]
+key = "INTEGRA"
+brand = "Farer"
+model = "Integra"
+fmv = "520.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["farer integra", "integra perlarum"]
+requires_any = []
+excludes = ["integrated bracelet"]
+notes = "A bare `integra` alias once matched the word 'integrated' and priced a £175 Tissot PRX as a £520 Farer. The aliases are brand-qualified for that reason; do not shorten them."
+
+[[reference]]
+key = "RESOLUTE"
+brand = "Farer"
+model = "Resolute"
+fmv = "480.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["farer resolute"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "OXLEY"
+brand = "Farer"
+model = "Oxley GMT"
+fmv = "540.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["oxley"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "EXMOOR"
+brand = "Farer"
+model = "Exmoor Field"
+fmv = "420.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["exmoor"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "PENDINE"
+brand = "Farer"
+model = "Pendine Chronograph"
+fmv = "420.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["pendine"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "MEAKIN"
+brand = "Farer"
+model = "Meakin"
+fmv = "400.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["meakin"]
+requires_any = []
+excludes = []
+notes = "Discontinued."
+
+[[reference]]
+key = "AINSDALE"
+brand = "Farer"
+model = "Ainsdale Chronograph"
+fmv = "430.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["ainsdale"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "HOPEWELL"
+brand = "Farer"
+model = "Hopewell Automatic"
+fmv = "450.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["hopewell"]
+requires_any = []
+excludes = []
+notes = ""
+
+[[reference]]
+key = "DURHAM"
+brand = "Farer"
+model = "Durham Cushion"
+fmv = "420.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["farer durham"]
+requires_any = []
+excludes = []
+notes = "Brand-qualified alias: Durham is a place name and appears in seller locations."
+
+[[reference]]
+key = "AQUAMATIC"
+brand = "Farer"
+model = "AquaMatic Diver"
+fmv = "480.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["aquamatic", "nazare"]
+requires_any = []
+excludes = []
+notes = ""
+
+# ======================================================================
+#  BALTIC — 0.3 new listings/day. French; thin in the UK.
+# ======================================================================
+
+[[reference]]
+key = "AQUASCAPHE-CLASSIC"
+brand = "Baltic"
+model = "Aquascaphe Classic"
+fmv = "420.00"
+verified = false
+priority = 0
+synthetic_key = true
+aliases = ["aquascaphe classic", "aquascaphe"]
+requires_any = []
+excludes = ["dual crown", "gmt", "bronze"]
+notes = "Beads-of-rice bracelet commands roughly £80 over the Tropic rubber."
+
+[[reference]]
+key = "AQUASCAPHE-DUAL-CROWN"
+brand = "Baltic"
+model = "Aquascaphe Dual Crown"
+fmv = "480.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["aquascaphe dual crown"]
+requires_any = []
+excludes = ["gmt", "bronze"]
+notes = "Aliased on the full model name — a bare 'dual crown' is a generic diver descriptor other brands use."
+
+[[reference]]
+key = "AQUASCAPHE-GMT"
+brand = "Baltic"
+model = "Aquascaphe GMT"
+fmv = "550.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["aquascaphe gmt"]
+requires_any = []
+excludes = ["bronze"]
+notes = ""
+
+[[reference]]
+key = "AQUASCAPHE-BRONZE"
+brand = "Baltic"
+model = "Aquascaphe Bronze"
+fmv = "500.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["aquascaphe bronze"]
+requires_any = []
+excludes = []
+notes = "Bronze patinates, so condition language on these listings is unreliable."
+
+[[reference]]
+key = "MR01"
+brand = "Baltic"
+model = "MR01 Micro-rotor"
+fmv = "480.00"
+verified = false
+priority = 10
+synthetic_key = true
+aliases = ["baltic mr01", "mr01"]
+requires_any = []
+excludes = []
+notes = ""
+
+# ======================================================================
+#  SINN — 0.3 new listings/day and ZERO standing UK stock when measured.
+#  Retained so a stray Sinn is identified rather than dropped as unpriced,
+#  but the 556 trades above the £800 search ceiling, so expect nothing.
+# ======================================================================
+
+[[reference]]
+key = "556-I"
+brand = "Sinn"
+model = "556 I"
+fmv = "680.00"
+verified = false
+priority = 10
+aliases = ["sinn 556 i", "sinn 556i"]
+requires_any = []
+excludes = ["556 a", "556a"]
+notes = "The OEM H-Link solid bracelet adds roughly £160 over leather or silicone. Note this key is a REAL manufacturer reference despite looking like one of our invented slugs — synthetic_key is declared per entry precisely because the shapes are indistinguishable."
+
+[[reference]]
+key = "556-A"
+brand = "Sinn"
+model = "556 A"
+fmv = "700.00"
+verified = false
+priority = 10
+aliases = ["sinn 556 a", "sinn 556a"]
+requires_any = []
+excludes = ["556 i", "556i"]
+notes = ""
+
+[[reference]]
+key = "104-ST-SA-I"
+brand = "Sinn"
+model = "104 St Sa I"
+fmv = "740.00"
+verified = false
+priority = 10
+aliases = ["sinn 104 st sa", "sinn 104 st"]
+requires_any = []
+excludes = []
+notes = ""
