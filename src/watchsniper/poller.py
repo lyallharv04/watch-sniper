@@ -93,16 +93,23 @@ class Engine:
 
         A single 200-row `newlyListed` page reaches roughly twelve days back at
         the measured arrival rate, so one page per sweep is ample for catching
-        new listings; paging is only for the initial seed.
+        new Buy It Now listings; paging there is only for the initial seed.
+
+        The auction sweep is sorted ending-soonest, so one page covers only the
+        next few hundred endings. It keeps paging until the last row on a page
+        ends beyond AUCTION_HORIZON, so every auction ending inside the horizon
+        is seen on each sweep.
         """
         assert self.client is not None, "no eBay client configured"
         result = PollResult(kind=kind)
         run_id = self.db.start_poll(kind)
         before = self.client.budget.used
+        horizon = utcnow() + C.AUCTION_HORIZON
         try:
             sort = "newlyListed" if kind == "bin" else "endingSoonest"
             buying = "FIXED_PRICE" if kind == "bin" else "AUCTION"
-            for page_no in range(pages):
+            page_no = 0
+            while True:
                 page = self.client.search(
                     q=C.search_query(),
                     sort=sort,
@@ -115,6 +122,7 @@ class Engine:
                     day=_today(),
                 )
                 rows = page.get("itemSummaries") or []
+                listing = None
                 for row in rows:
                     result.items_seen += 1
                     listing = from_item_summary(row)
@@ -128,7 +136,18 @@ class Engine:
                         result.alerts += 1
                         if notify:
                             self._notify(assessment)
+                page_no += 1
                 if len(rows) < C.SEARCH_PAGE_LIMIT:
+                    break
+                # Ending-soonest order: if the last row still ends inside the
+                # horizon, the next page may hold more that do.
+                inside_horizon = (
+                    kind == "auction"
+                    and listing is not None
+                    and listing.end_time_utc is not None
+                    and listing.end_time_utc <= horizon
+                )
+                if page_no >= pages and not inside_horizon:
                     break
             self.last_error = None
         except BudgetExhausted as exc:

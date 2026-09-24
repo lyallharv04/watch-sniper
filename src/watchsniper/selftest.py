@@ -661,6 +661,72 @@ class TestAlerting(unittest.TestCase):
         db.close()
 
 
+class _FakeBudget:
+    used = 0
+
+
+class _FakeClient:
+    """Serves ending-soonest auction pages from a list; counts the calls."""
+
+    def __init__(self, end_times: list[datetime]):
+        self.end_times = end_times
+        self.budget = _FakeBudget()
+        self.offsets: list[int] = []
+
+    def search(self, *, offset: int, limit: int, **_kw) -> dict:
+        self.budget.used += 1
+        self.offsets.append(offset)
+        rows = [
+            {
+                "itemId": f"v1|{i}|0",
+                "title": "Hamilton Khaki Field",
+                "buyingOptions": ["AUCTION"],
+                "currentBidPrice": {"value": "150.00", "currency": "GBP"},
+                "itemEndDate": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            }
+            for i, t in enumerate(self.end_times[offset:offset + limit], start=offset)
+        ]
+        return {"itemSummaries": rows}
+
+
+class TestAuctionPaging(unittest.TestCase):
+    def sweep(self, hours: list[float]) -> tuple[_FakeClient, int]:
+        from datetime import timedelta
+
+        from .db import Database
+        from .poller import Engine
+
+        now = utcnow()
+        client = _FakeClient([now + timedelta(hours=h) for h in hours])
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "t.db")
+            engine = Engine(db, client)
+            engine.poll_once("auction", notify=False)
+            stored = len(db.all_listings())
+            db.close()
+        return client, stored
+
+    def test_pages_until_past_the_horizon(self):
+        limit = C.SEARCH_PAGE_LIMIT
+        horizon_h = C.AUCTION_HORIZON.total_seconds() / 3600
+        # Two and a half pages inside the horizon, then two pages beyond it.
+        inside = [horizon_h * i / (limit * 2.5 + 1) for i in range(int(limit * 2.5))]
+        beyond = [horizon_h + 1 + i for i in range(limit * 2)]
+        client, stored = self.sweep(inside + beyond)
+        self.assertEqual(client.offsets, [0, limit, limit * 2])
+        self.assertGreaterEqual(stored, len(inside))
+
+    def test_one_page_when_the_first_page_already_passes_the_horizon(self):
+        horizon_h = C.AUCTION_HORIZON.total_seconds() / 3600
+        client, _ = self.sweep([horizon_h + 1 + i for i in range(C.SEARCH_PAGE_LIMIT * 2)])
+        self.assertEqual(client.offsets, [0])
+
+    def test_stops_on_a_short_page(self):
+        client, stored = self.sweep([1.0] * 5)
+        self.assertEqual(client.offsets, [0])
+        self.assertEqual(stored, 5)
+
+
 class TestIncrements(unittest.TestCase):
     def test_next_bid_steps_up(self):
         inc = Increments.load()

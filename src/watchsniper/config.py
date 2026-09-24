@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from .money import Pence, parse_gbp
@@ -193,6 +194,9 @@ SEARCH_BRANDS = (
     "Sinn",
 )
 SEARCH_PAGE_LIMIT = 200
+# The auction sweep pages through ending-soonest results until it has seen
+# every auction ending within this window, so none is first seen at the end.
+AUCTION_HORIZON = timedelta(days=3)
 
 
 def search_query() -> str:
