@@ -84,6 +84,12 @@ almost no UK watch listings and is not useful here.
 
 Leave `BIND_HOST` at `127.0.0.1`. The unit file pins it there regardless.
 
+Set `PUBLIC_BASE_URL` to the hostname you will give the tunnel in steps 9 and
+10, with `https://` and no trailing slash, e.g.
+`PUBLIC_BASE_URL=https://watches.example.com`. It is what the dashboard links
+in phone alerts point at. Without it they point at `http://localhost:8137`,
+which opens nothing on a phone. If you change it later, restart the service.
+
 Every other variable has a working default. Each one in `.env.example` says
 where it comes from and what happens if it is missing.
 
@@ -278,6 +284,21 @@ sudo systemctl restart watchsniper
 
 A schema change is applied on start. Verdicts are derived data: if their shape
 changed they are rebuilt by re-scoring, automatically.
+
+## 15. Final check — from outside, on mobile data
+
+On your phone, turn Wi-Fi **off** so the request comes from the mobile
+network, not from anywhere near the server. Open a private (incognito) tab
+and go to the hostname, e.g. `https://watches.example.com`.
+
+Expect the **Cloudflare Access login page first** — the email one-time-PIN
+prompt — and the dashboard only after you have logged in.
+
+If the dashboard, or any part of it, appears before the Access login, stop:
+the dashboard is exposed. Take the public hostname off the tunnel
+(**Networks → Tunnels → watchsniper → Public Hostname → delete**) until the
+Access application's domain matches the hostname exactly, then repeat this
+step.
 
 ---
 

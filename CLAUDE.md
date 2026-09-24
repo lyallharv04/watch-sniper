@@ -244,7 +244,10 @@ reached only through a token-based Cloudflare Tunnel, with `cloudflared`
 installed as its own service. Cloudflare Access in front of the tunnel's
 hostname is the only authentication, so the Access application must exist and
 cover the whole hostname before the hostname is routed. No inbound port is
-opened. The steps and their order are in `docs/DEPLOY.md`.
+opened. `PUBLIC_BASE_URL` is set to that hostname so the dashboard links in
+ntfy alerts open on a phone; unset, it falls back to localhost. The steps and
+their order are in `docs/DEPLOY.md`, ending with a check from mobile data that
+the Access login appears before the dashboard.
 
 ---
 
