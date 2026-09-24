@@ -140,34 +140,6 @@ the environment; only the third protects against a future edit.
 
 *Carries forward **D2** unchanged and strengthens it.*
 
-### A7. Every listing gets two valuations, not one
-
-Most listings state neither scope of delivery nor bracelet type, and the brief
-is explicit that these unknowns move the valuation further than the entire fee
-stack does. The inherited model handled that by assuming the worst and emitting
-one number, which compounds to roughly 65% of reference FMV once condition is
-included — pessimistic enough that very little surfaces, and, worse, silent
-about *why* it did not.
-
-So each listing gets a pessimistic valuation, in which every unstated field
-takes its worst plausible value, and an optimistic one, in which each takes its
-best. The pass/fail gate uses the pessimistic figure, so a `PASS` means it is a
-deal on the worst reading. A listing that clears the optimistic ceiling but not
-the pessimistic one gets its own verdict, `DEPENDS_ON_UNKNOWNS`, naming the
-fields it depends on.
-
-This is requirement 4 made concrete: the width of the band *is* the uncertainty,
-visible at a glance without arithmetic, and a wide band says "data gap" where a
-single number would have said "no". It also makes two of the brief's open
-questions measurable rather than arguable — the ratio of `PASS` to
-`DEPENDS_ON_UNKNOWNS` says whether the unknown-field defaults are too harsh, and
-the band width per reference says where reading photographs would actually pay.
-
-A catalogue entry may also carry `fmv_low`/`fmv_high` directly, which folds
-variant ambiguity into the same mechanism. A Christopher Ward C60 whose logo era
-is unknown, or a Tissot PRX whose movement is unstated, is a band rather than a
-guess.
-
 ### A8. The maximum allowable bid is solved by integer bisection
 
 `bid + buyer_protection(bid)` is strictly increasing in `bid`, so bisecting to
@@ -240,17 +212,6 @@ unarguable number.
 
 *Defers **D9**, **D10**, **D11**, **D12** and **D28**. None is reversed — the
 reasoning in all five still stands and should be re-read before building it.*
-
-### A12. There is no service-buffer constant
-
-The inherited model applied both `BRACELET_MULT["AFTERMARKET"]` and a flat
-`SERVICE_BUFFER_OEM_BRACELET`, which charges for the same defect twice and
-therefore under-bids on every listing with an aftermarket bracelet. The
-multiplier does that job. A flat buffer belongs to a *stated* fault, and Phase 1
-does not read descriptions closely enough to find one.
-
-The parameter still exists in `fees.sell_side` and renders as a £0.00 line in
-the derivation, so the operator can see it was considered rather than forgotten.
 
 ### A13. One compound query per sweep, not one per brand
 
@@ -402,3 +363,53 @@ Recorded because live behaviour that contradicts a plan is information.
   inherited rule matched only the literal phrase "custom coloured dial". A
   custom dial is not a discounted PRX, it is a different and much less liquid
   object.
+
+---
+
+## 4. Archive
+
+Entries no longer in force, kept verbatim so their reasoning is not lost.
+
+Archived 2026-09-24: **A7** and **A12** are superseded by the single
+valuation (FMV point × condition only; scope and bracelet are labels).
+A12's reasoning rested on `BRACELET_MULT`, which no longer exists, and the
+service-buffer parameter it kept has been removed.
+
+### A7. Every listing gets two valuations, not one
+
+Most listings state neither scope of delivery nor bracelet type, and the brief
+is explicit that these unknowns move the valuation further than the entire fee
+stack does. The inherited model handled that by assuming the worst and emitting
+one number, which compounds to roughly 65% of reference FMV once condition is
+included — pessimistic enough that very little surfaces, and, worse, silent
+about *why* it did not.
+
+So each listing gets a pessimistic valuation, in which every unstated field
+takes its worst plausible value, and an optimistic one, in which each takes its
+best. The pass/fail gate uses the pessimistic figure, so a `PASS` means it is a
+deal on the worst reading. A listing that clears the optimistic ceiling but not
+the pessimistic one gets its own verdict, `DEPENDS_ON_UNKNOWNS`, naming the
+fields it depends on.
+
+This is requirement 4 made concrete: the width of the band *is* the uncertainty,
+visible at a glance without arithmetic, and a wide band says "data gap" where a
+single number would have said "no". It also makes two of the brief's open
+questions measurable rather than arguable — the ratio of `PASS` to
+`DEPENDS_ON_UNKNOWNS` says whether the unknown-field defaults are too harsh, and
+the band width per reference says where reading photographs would actually pay.
+
+A catalogue entry may also carry `fmv_low`/`fmv_high` directly, which folds
+variant ambiguity into the same mechanism. A Christopher Ward C60 whose logo era
+is unknown, or a Tissot PRX whose movement is unstated, is a band rather than a
+guess.
+
+### A12. There is no service-buffer constant
+
+The inherited model applied both `BRACELET_MULT["AFTERMARKET"]` and a flat
+`SERVICE_BUFFER_OEM_BRACELET`, which charges for the same defect twice and
+therefore under-bids on every listing with an aftermarket bracelet. The
+multiplier does that job. A flat buffer belongs to a *stated* fault, and Phase 1
+does not read descriptions closely enough to find one.
+
+The parameter still exists in `fees.sell_side` and renders as a £0.00 line in
+the derivation, so the operator can see it was considered rather than forgotten.
