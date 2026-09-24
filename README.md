@@ -18,20 +18,21 @@ New here? [STATUS.md](STATUS.md) says what is running and what is not.
 1. Sweeps eBay UK every 90 seconds for Buy It Now listings in the target band,
    and every 10 minutes for auctions.
 2. Matches each listing to a reference in [`data/catalogue.toml`](data/catalogue.toml).
-3. Values it twice — once assuming every unstated field is at its worst, once
-   at its best — and solves for the maximum it could pay and still clear the
-   profit floor.
-4. Shows you every listing it saw, with its verdict and the reason, passes and
+3. Values it once — the reference FMV adjusted for condition — and solves for
+   the maximum it could pay and still clear the profit floor. Scope and
+   bracelet are read from the title and shown as tags; they do not move the
+   number.
+4. Shows you every listing it saw, with its verdict and the reason, deals and
    rejections alike.
-5. Pushes a notification to your phone when something clears the gate.
+5. Pushes a notification to your phone when something clears every gate, and
+   again if its price later drops.
 6. Tells you if it has stopped.
 
-Three verdicts matter:
+Two verdicts:
 
 | | |
 |---|---|
-| `PASS` | A deal even on the worst reading of what the listing does not say. |
-| `DEPENDS_ON_UNKNOWNS` | A deal only if the unstated fields fall the right way. The dashboard names which ones. |
+| `DEAL` | Clears every gate: priced at or under the maximum allowable bid. |
 | `REJECT_*` | Why not. Shown, not hidden — rejections are how the catalogue and the blacklist get debugged. |
 
 ---
@@ -130,7 +131,7 @@ src/watchsniper/
   config.py                  the single owner of every constant
   money.py                   integer pence; the rounding policy
   fees.py                    the fee stack and the maximum-bid solver
-  valuation.py               gates, the two-sided band, verdicts
+  valuation.py               gates, the valuation, verdicts
   catalogue.py               loading and matching references
   blacklist.py               negation-aware matching, bid increments
   ebay.py                    Browse API, application token only

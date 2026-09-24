@@ -18,12 +18,12 @@ brief asks to be made carefully, so precisely:
 |---|---|
 | Credentials | Present and working. Production keyset. |
 | Live diagnostic | Run. Passed. One standing finding (no rate-limit header). |
-| Listings ingested from live eBay | 877 |
+| Listings ingested from live eBay | 886 |
 | Poll cycles, all successful | 13, zero errors |
 | Browse API calls used | 19 |
 | Dashboard | Serving those listings. Every page rendered and checked. |
 | Notification channel | Verified end to end — published and read back with title, body, tags and click-through intact. |
-| Tests | 65, passing, hermetic — no network, no credentials |
+| Tests | Passing, hermetic — no network, no credentials |
 | Deployed to the VPS | **No.** It has run on the operator's desktop only. |
 
 The one thing not done is deployment to the target host, because this session
@@ -38,34 +38,33 @@ fee rate has been checked against a real invoice.** 51 of 51 entries are
 
 The system says so on every page and in every alert, and that is not modesty —
 under these constants the profit floor binds around a reference FMV where a 15%
-error consumes the entire margin. The two listings currently marked `PASS` are
-seed numbers clearing a maximum bid computed from seed numbers. **Do not act on
-them.**
+error consumes the entire margin. The three listings currently marked `DEAL`
+are seed numbers clearing a maximum bid computed from seed numbers. **Do not act
+on them.**
 
 ---
 
 ## What one live run measured
 
-877 listings, captured 2026-09-04, one compound query per sweep.
+886 listings, captured 2026-09-04, one compound query per sweep, re-scored
+under the current single valuation on 2026-09-24.
 
 | Verdict | n | |
 |---|---|---|
-| `REJECT_CATALOGUE` | 391 | 44.6% |
-| `REJECT_PRICE` | 345 | 39.3% |
-| `REJECT_SELLER` | 112 | 12.8% |
+| `REJECT_CATALOGUE` | 392 | 44.2% |
+| `REJECT_PRICE` | 354 | 40.0% |
+| `REJECT_SELLER` | 114 | 12.9% |
 | `REJECT_BLACKLIST` | 23 | 2.6% |
-| `DEPENDS_ON_UNKNOWNS` | 4 | 0.5% |
-| `PASS` | 2 | 0.2% |
+| `DEAL` | 3 | 0.3% |
 
-84 of the 877 are auctions; 219 are business sellers, which take the
+87 of the 886 are auctions; 219 are business sellers, which take the
 no-buyer-protection branch.
 
 Two things this settles, both of which were open questions in the brief:
 
-**The unknown-field defaults are not too harsh to surface anything.** Six
-listings out of 877 reached the operator's attention. That is a usable signal
-rate — neither an empty dashboard nor a flood — and it was measured rather than
-guessed.
+**The valuation is not too harsh to surface anything.** Three listings out of
+886 are `DEAL`. That is a usable signal rate — neither an empty dashboard nor a
+flood — and it was measured rather than guessed.
 
 **The catalogue, not the arithmetic, is the binding constraint.** Nearly half of
 all listings match no reference. The composition, from
@@ -160,7 +159,6 @@ Recorded so none of them gets closed by assumption.
 | Whether the seed FMVs are right | Your own sales | Open. Nothing is trustworthy until this moves. |
 | Real UK deal flow rate | Two weeks of Phase 1 data | Open. One day of capture is not a rate — the previous attempt extrapolated a 2.3-hour window and overstated flow by 5.4x. |
 | Blacklist precision and recall | Your labels | Open. Corpus is 21 cases, three from live traffic. |
-| Whether unknown-field defaults are too pessimistic | Comparing pass rates | **Answered for now:** 6 actionable in 877. Not an empty dashboard. Re-check with real FMVs. |
 | Whether categories resolve on `EBAY_GB` | The diagnostic | **Answered: yes.** Leaf 31387, filter applied. |
 | Whether seller fields come back | The diagnostic | **Answered: yes**, all populated on 50/50 rows. |
 | Whether bid *timing* affects realised price | Outcome log on contested lots | Open, and Phase 2 depends on it. |
@@ -171,8 +169,8 @@ Recorded so none of them gets closed by assumption.
 
 - **Phase 2.** Nothing in this repository prepares for it. That is the rule the
   brief sets and the mistake the previous attempt made.
-- **LLM extraction of unstated fields.** [A10](DECISIONS.md). The band exists so
-  it is measurable later whether this pays.
+- **LLM extraction of unstated fields.** [A10](DECISIONS.md). Unstated fields
+  stay visibly unstated so it is measurable later whether this pays.
 - **Sold comps.** [A11](DECISIONS.md). They cannot calibrate without realised
   sales to check against, so the outcome log comes first.
 - **Twenty more catalogue entries.** [A17](DECISIONS.md).

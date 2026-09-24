@@ -150,7 +150,7 @@ not fit — across the whole plausible FMV range, which is a stronger claim than
 any single golden case.
 
 The golden case still exists and still reproduces exactly: Tissot PRX at the
-inherited seed FMV, mint, full set, £201.71. It agrees with the inherited
+inherited seed FMV, mint, £201.71. It agrees with the inherited
 arithmetic to the penny, which is the evidence that the port did not quietly
 change the model.
 
@@ -181,18 +181,19 @@ Dropped, for a reason that is not cost. Phase 1's product is a labelled record
 of how often the valuation model was right and in which direction it was wrong.
 An LLM that fills in an unstated field converts a *known* unknown into a
 *confident* value, and the resulting error is then indistinguishable from FMV
-error in the outcome log. Emitting the band instead keeps the two separable,
-and makes it measurable later whether resolving those fields is worth what it
-costs — which is a question you cannot answer once you have already been
+error in the outcome log. Leaving those fields visibly unstated — scope and
+bracelet as tags, an unstated condition marked as assumed — keeps the two
+separable, and makes it measurable later whether resolving them is worth what
+it costs — which is a question you cannot answer once you have already been
 answering it.
 
 It also removes an API key, a daily spend cap, a response cache and a prompt
 that must be kept in sync with an enum.
 
-**What would reverse this:** band width, per reference, on listings that reach
-`DEPENDS_ON_UNKNOWNS`. If a material share of actionable listings sit in a wide
-band that a photograph would collapse, vision earns its place. That number is
-in the dashboard now; it was not before.
+**What would reverse this:** labelled outcomes where the valuation error tracks
+an unstated field — an assumed condition, or a scope or bracelet the title did
+not give. If a material share of wrong calls would have been corrected by a
+photograph, vision earns its place.
 
 ### A11. No sold-comps vendor in Phase 1
 
@@ -241,14 +242,14 @@ cannot list a variable the code does not read, and it cannot omit one it does.
 ### A15. There is no VAT-registered valuation branch
 
 The inherited model carried a second arithmetic path for the registered case,
-with its own golden figure. `VAT_REGISTERED` is `False`, the operator is under
-the threshold, and the registered path was as unverified as everything else —
-so it was a second unchecked model kept warm for a state the business is not in.
+with its own golden figure. The operator is not registered, and the registered
+path was as unverified as everything else — so it was a second unchecked model
+kept warm for a state the business is not in.
 
 Registering would reduce every maximum bid materially and would need the
 arithmetic rebuilt against an accountant's advice anyway, not resurrected from a
-constant. `VAT_REGISTERED` remains as the single flag that would need to change,
-and the threshold figures remain so the display has one owner.
+constant. There is no registration flag in code; registering means rebuilding
+the fee arithmetic.
 
 ### A16. TLS uses the operating system's trust store where it can
 
@@ -299,20 +300,20 @@ rebuild's.
 | D1 | UK domestic only, `EBAY_GB`, `itemLocationCountry:GB`. Operator requirement; the original spec sourced exclusively from abroad. | **Kept.** |
 | D2 | Two stages; Phase 1 holds no eBay user token, so bidding is impossible by construction rather than disabled by a flag. | **Kept**, strengthened — see **A6**. |
 | D3 | Manual execution loses almost nothing, because eBay auctions are proxy auctions with a hard close and the alpha is in finding the mispriced listing, not in shaving seconds. | **Kept.** It is also why Phase 2 needs no scheduler — see the note below. |
-| D4 | Not VAT registered; eBay fee VAT is therefore not reclaimable, and the threshold monitor is a real guard. | **Kept.** The second arithmetic branch is not — see **A15**. |
+| D4 | Not VAT registered; eBay fee VAT is therefore not reclaimable, and the threshold monitor is a real guard. | **Kept** for fee VAT. The threshold monitor is not built (see D14), and the second arithmetic branch is gone — see **A15**. |
 | D5 | The maximum bid is solved for, not divided out, because buyer protection is a function of the bid. | **Kept.** See **A8**. |
 | D6 | Postgres is the system of record, because Redis is not durable, queryable or auditable. | **Superseded by A2.** The argument against Redis was right and still holds; the argument for a *server* did not survive one writer and one reader. |
 | D7 | Stage 1 needs neither Celery nor Redis; dedup is the listings primary key and scheduling is two loops with a sleep. | **Kept and completed.** The dormant Redis service behind a `stage2` profile is gone. Dormant scaffolding is a maintenance cost that pays nothing. |
 | D8 | Comps come from a curated catalogue, because Marketplace Insights is closed and `findCompletedItems` is retired. | **Kept.** |
 | D9 | Tier 2 sold comps from CompSniper; a managed scraper carries the block risk on the vendor's account rather than yours. Validated live. | **Deferred — A11.** Not reversed. Re-read before building. |
-| D10 | Tier 2 produces a band, never a reverse-normalised point, because dividing by the same multiplier the live pipeline multiplies by compounds the error upward. | **Deferred with D9** — but the *idea* is now everywhere: **A7** is the same insight applied to live listings instead of comps. |
+| D10 | Tier 2 produces a band, never a reverse-normalised point, because dividing by the same multiplier the live pipeline multiplies by compounds the error upward. | **Deferred with D9.** |
 | D11 | Best Offer rows are stored but never aggregated, because eBay reports the asking price on those. Every exclusion is counted. | **Deferred with D9.** The finding that 44% of live rows were Best Offer is the reason to keep this rule when the time comes. |
 | D12 | Tier 2 writes suggestions, not silent rewrites. | **Deferred with D9.** |
-| D13 | Capital caps are rolling windows, never calendar periods, because a calendar reset lets you spend the cap twice in twelve hours. | **Kept as constants, displayed, unenforced** — nothing in Phase 1 can spend money. The reasoning is what matters when Phase 2 enforces them. |
-| D14 | The VAT threshold monitor is the actual guard; the spend caps govern purchases and the threshold is on sales. | **Kept as constants.** Not tracked until there are outcomes to track. |
+| D13 | Capital caps are rolling windows, never calendar periods, because a calendar reset lets you spend the cap twice in twelve hours. | **Not built.** Nothing in Phase 1 can spend money, so there are no caps. The reasoning is what matters when Phase 2 adds them. |
+| D14 | The VAT threshold monitor is the actual guard; the spend caps govern purchases and the threshold is on sales. | **Not built.** Nothing tracks sales until there are outcomes to track. |
 | D15 | Snipe offsets T-8s primary, T-4s retry, because T-3s has no retry margin. | **Phase 2, and probably moot.** Given D3, precise late placement buys only informational advantage, which is smallest in thin markets. A scheduler, an armed/fired state machine and clock synchronisation may all be avoidable — and avoiding them makes requirement 13 (no money moves while the operator sleeps) free rather than engineered. |
 | D16 | LLM prompt enum lists are generated from the Python enums, because hand-written ones drift. | **Moot — A10.** There is no prompt. |
-| D17 | Stage 1 biases toward recall, because a human adjudicates every alert. | **Kept in spirit.** `DEPENDS_ON_UNKNOWNS` is the recall bias: it surfaces the marginal case and labels it marginal. |
+| D17 | Stage 1 biases toward recall, because a human adjudicates every alert. | **Kept.** Rejections are shown beside deals with every gate result, so a marginal case is visible rather than dropped. |
 | D18 | Blacklist matching is negation-aware with a labelled corpus, because naive matching fails both ways. | **Kept**, rules ported intact. The corpus is now a build gate and has grown from live traffic. |
 | D19 | Web Push primary, email backstop, no Telegram, no iOS. | **Superseded by A4.** The constraint that produced it — no Telegram, no iOS — is unchanged and is what ntfy satisfies. |
 | D20 | Dashboard behind Cloudflare Tunnel and Access, because that surface reaches money and auth should never be hand-rolled. | **Superseded by A5.** "Never hand-roll auth" is right. Not having a public surface is better than either. |
@@ -320,7 +321,7 @@ rebuild's.
 | D22 | Host is a plain VPS, not a scale-to-zero platform, because this is a stateful poller that must never sleep. | **Kept.** |
 | D23 | The Offer API application was filed to start the clock, but nothing depends on it. | **Kept.** |
 | D24 | Deadman heartbeat, because a detection system that dies silently at 3am is useless. | **Kept.** The push-subscription-health half is moot: **A4** removed the thing it monitored. |
-| D25 | `MAX_EXPOSURE_PER_REF` stays at the higher figure; self-competition is real but hypothetical, and deal flow binds first. | **Kept as a constant.** Revisit if you ever hold three of one reference. |
+| D25 | The per-reference exposure cap stays at the higher figure; self-competition is real but hypothetical, and deal flow binds first. | **Not built.** Nothing in Phase 1 holds stock to limit. Revisit if you ever hold three of one reference. |
 | D26 | Sinn loses its poller slot; measured zero UK standing stock, and the 556 trades above the search ceiling. | **Partially reversed.** With one compound query (**A13**) a brand costs nothing to include, so Sinn is back in the query — the reason to drop it was per-brand call cost, and that reason is gone. Its entries were always retained. |
 | D27 | Widen the catalogue rather than narrowing the brand list, because dropping brands shrinks the funnel. | **Kept as direction, qualified by A17.** Widen it with real numbers, not with more estimates. |
 | D28 | `SOLD_BAND_EXPECTED_RATIO` is retained but is not a gate. | **Deferred with D9.** |
@@ -353,8 +354,7 @@ Recorded because live behaviour that contradicts a plan is information.
 - **eBay UK qualifies "Pre-owned" with a grade** in the `condition` string —
   "Pre-owned - Excellent", "- Good", "- Fair" — while `conditionId` stays 3000.
   That is a seller-declared grade on a fixed scale and it was being discarded.
-  Reading it cut `DEPENDS_ON_UNKNOWNS` from 8 to 4 on the captured set, because
-  fewer listings have an unknown condition to widen the band.
+  Reading it means fewer listings are valued at an assumed condition.
 - **Real titles interleave a generation marker.** "C60 Trident **Mk3** Pro 300"
   does not contain the substring "c60 trident pro 300", and eight live listings
   were unpriced for exactly that reason. Alias matching on a single long phrase
