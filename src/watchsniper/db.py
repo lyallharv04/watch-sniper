@@ -94,6 +94,15 @@ CREATE TABLE IF NOT EXISTS outcomes (
     created_at_utc    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS closings (
+    item_id           TEXT PRIMARY KEY REFERENCES listings(item_id),
+    checked_at_utc    TEXT NOT NULL,
+    final_price_pence INTEGER,
+    bid_count         INTEGER NOT NULL DEFAULT 0,
+    had_bids          INTEGER NOT NULL,
+    detail            TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY,
     at_utc   TEXT NOT NULL,
@@ -467,6 +476,35 @@ class Database:
     def recent_notifications(self, limit: int = 25) -> list[sqlite3.Row]:
         return self.query(
             "SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,)
+        )
+
+    def auctions_awaiting_close(self, ended_before: datetime) -> list[str]:
+        """Stored auctions whose end time has passed and have no closing yet."""
+        cutoff = _iso(ended_before.replace(microsecond=0))
+        return [
+            r["item_id"]
+            for r in self.query(
+                "SELECT l.item_id FROM listings l"
+                " LEFT JOIN closings c ON c.item_id = l.item_id"
+                " WHERE l.is_auction = 1 AND c.item_id IS NULL"
+                " AND l.end_time_utc IS NOT NULL AND l.end_time_utc <= ?"
+                " ORDER BY l.end_time_utc",
+                (cutoff,),
+            )
+        ]
+
+    def save_closing(
+        self,
+        item_id: str,
+        final_price: int | None,
+        bid_count: int,
+        detail: str = "",
+    ) -> None:
+        self.execute(
+            "INSERT OR REPLACE INTO closings"
+            " (item_id,checked_at_utc,final_price_pence,bid_count,had_bids,detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (item_id, _iso(utcnow()), final_price, bid_count, int(bid_count > 0), detail),
         )
 
     def all_listings(self) -> list[sqlite3.Row]:

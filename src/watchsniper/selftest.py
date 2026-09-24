@@ -689,6 +689,100 @@ class _FakeClient:
         return {"itemSummaries": rows}
 
 
+class _FakeItemClient:
+    """get_item from a dict; a value that is an exception is raised."""
+
+    def __init__(self, items: dict):
+        self.items = items
+        self.budget = _FakeBudget()
+        self.fetched: list[str] = []
+
+    def get_item(self, item_id: str, *, day: str) -> dict:
+        self.budget.used += 1
+        self.fetched.append(item_id)
+        value = self.items[item_id]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+class TestClosings(unittest.TestCase):
+    def setUp(self):
+        from datetime import timedelta
+
+        from .db import Database
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        now = utcnow()
+        just_past = C.CLOSING_CHECK_DELAY + timedelta(minutes=1)
+        for item_id, ended_ago in (
+            ("sold", just_past),
+            ("unbid", just_past),
+            ("gone", just_past),
+            ("flaky", just_past),
+            ("too_soon", C.CLOSING_CHECK_DELAY - timedelta(minutes=1)),
+        ):
+            self.db.upsert_listing(
+                listing(item_id=item_id, is_auction=True, end_time_utc=now - ended_ago)
+            )
+        self.db.upsert_listing(
+            listing(item_id="bin", end_time_utc=now - timedelta(days=1))
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def run_closings(self, client):
+        from .poller import Engine
+
+        return Engine(self.db, client).record_closings()
+
+    def item(self, value: str, bids):
+        return {
+            "buyingOptions": ["AUCTION"],
+            "price": {"value": value, "currency": "GBP"},
+            "currentBidPrice": {"value": value, "currency": "GBP"},
+            "bidCount": bids,
+        }
+
+    def closings(self) -> dict:
+        return {r["item_id"]: dict(r) for r in self.db.query("SELECT * FROM closings")}
+
+    def test_records_final_price_and_bids_just_after_the_end(self):
+        from .ebay import EbayError
+
+        client = _FakeItemClient(
+            {
+                "sold": self.item("344.20", 12),
+                "unbid": self.item("299.00", None),
+                "gone": EbayError("not found", 404, ""),
+                "flaky": EbayError("server error", 503, ""),
+            }
+        )
+        self.assertEqual(self.run_closings(client), 3)
+        got = self.closings()
+        self.assertEqual(got["sold"]["final_price_pence"], 34420)
+        self.assertEqual(got["sold"]["bid_count"], 12)
+        self.assertEqual(got["sold"]["had_bids"], 1)
+        self.assertEqual(got["unbid"]["had_bids"], 0)
+        self.assertIsNone(got["gone"]["final_price_pence"])
+        self.assertNotIn("flaky", got)  # retried next sweep
+        self.assertNotIn("too_soon", got)  # inside CLOSING_CHECK_DELAY
+        self.assertNotIn("bin", client.fetched)  # Buy It Now is ignored
+
+    def test_each_auction_is_fetched_once(self):
+        client = _FakeItemClient(
+            {"sold": self.item("344.20", 12), "unbid": self.item("299.00", None),
+             "gone": self.item("1.00", None), "flaky": self.item("1.00", None)}
+        )
+        self.run_closings(client)
+        before = len(client.fetched)
+        self.run_closings(client)
+        self.assertEqual(len(client.fetched), before)
+
+
 class TestAuctionPaging(unittest.TestCase):
     def sweep(self, hours: list[float]) -> tuple[_FakeClient, int]:
         from datetime import timedelta

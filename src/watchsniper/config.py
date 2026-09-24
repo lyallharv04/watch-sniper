@@ -197,6 +197,10 @@ SEARCH_PAGE_LIMIT = 200
 # The auction sweep pages through ending-soonest results until it has seen
 # every auction ending within this window, so none is first seen at the end.
 AUCTION_HORIZON = timedelta(days=3)
+# How long after an auction's end time its closing price is fetched. getItem
+# keeps returning ended auctions with the final bid, so this only needs to be
+# long enough for eBay to settle the result.
+CLOSING_CHECK_DELAY = timedelta(minutes=5)
 
 
 def search_query() -> str:

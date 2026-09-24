@@ -149,6 +149,8 @@ class Engine:
                 )
                 if page_no >= pages and not inside_horizon:
                     break
+            if kind == "auction":
+                self.record_closings()
             self.last_error = None
         except BudgetExhausted as exc:
             result.error = str(exc)
@@ -170,6 +172,44 @@ class Engine:
             error=result.error,
         )
         return result
+
+    def record_closings(self) -> int:
+        """Fetch each stored auction once, just after it ends, and keep the result.
+
+        Browse getItem keeps returning an ended auction with its final
+        `currentBidPrice` and `bidCount` (measured live on 2026-09-24), so the
+        closing price is read directly rather than inferred from the last bid
+        a sweep happened to see. An auction with no bids reports its starting
+        price and a null bid count; it is stored with `had_bids` false.
+
+        A 404 is stored with no price so it is not retried. Any other failure
+        leaves the auction pending for the next sweep. BudgetExhausted
+        propagates to the sweep, which records it.
+        """
+        assert self.client is not None
+        done = 0
+        for item_id in self.db.auctions_awaiting_close(
+            utcnow() - C.CLOSING_CHECK_DELAY
+        ):
+            try:
+                row = self.client.get_item(item_id, day=_today())
+            except BudgetExhausted:
+                raise
+            except EbayError as exc:
+                if exc.status == 404:
+                    self.db.save_closing(item_id, None, 0, "HTTP 404")
+                    done += 1
+                continue
+            final = from_item_summary(row)
+            price = final.price if final.currency == "GBP" else None
+            self.db.save_closing(
+                item_id,
+                price,
+                final.bid_count or 0,
+                "" if price is not None else f"no GBP price ({final.currency or 'none'})",
+            )
+            done += 1
+        return done
 
     def _should_notify(self, a: Assessment, is_new: bool) -> bool:
         if not a.is_actionable:

@@ -479,6 +479,7 @@ def render_constants(engine: Engine) -> str:
         ("SEARCH_MIN_PRICE", fmt(C.SEARCH_MIN_PRICE)),
         ("SEARCH_MAX_PRICE", fmt(C.SEARCH_MAX_PRICE)),
         ("AUCTION_HORIZON", str(C.AUCTION_HORIZON)),
+        ("CLOSING_CHECK_DELAY", str(C.CLOSING_CHECK_DELAY)),
         ("EBAY_CATEGORY_IDS", C.EBAY_CATEGORY_IDS),
     ]
     body = "".join(row(n, v) for n, v in items)
