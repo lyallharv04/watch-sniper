@@ -121,7 +121,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     kind     TEXT NOT NULL,
     item_id  TEXT,
     ok       INTEGER NOT NULL,
-    detail   TEXT NOT NULL DEFAULT ''
+    detail   TEXT NOT NULL DEFAULT '',
+    price_pence INTEGER
 );
 """
 
@@ -155,6 +156,15 @@ class Database:
                 self._conn.execute("DROP TABLE verdicts")
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
+            # The alerted price was added later; older files lack the column.
+            ncols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(notifications)")
+            }
+            if "price_pence" not in ncols:
+                self._conn.execute(
+                    "ALTER TABLE notifications ADD COLUMN price_pence INTEGER"
+                )
             self._conn.commit()
 
     def close(self) -> None:
@@ -429,20 +439,29 @@ class Database:
         )
 
     def log_notification(
-        self, kind: str, ok: bool, detail: str = "", item_id: str | None = None
+        self,
+        kind: str,
+        ok: bool,
+        detail: str = "",
+        item_id: str | None = None,
+        price: int | None = None,
     ) -> None:
         self.execute(
-            "INSERT INTO notifications (at_utc,kind,item_id,ok,detail)"
-            " VALUES (?,?,?,?,?)",
-            (_iso(utcnow()), kind, item_id, int(ok), detail),
+            "INSERT INTO notifications (at_utc,kind,item_id,ok,detail,price_pence)"
+            " VALUES (?,?,?,?,?,?)",
+            (_iso(utcnow()), kind, item_id, int(ok), detail, price),
         )
 
-    def notified_recently(self, item_id: str) -> bool:
-        return (
-            self.one(
-                "SELECT 1 FROM notifications WHERE item_id=? AND ok=1", (item_id,)
-            )
-            is not None
+    def last_alert(self, item_id: str) -> sqlite3.Row | None:
+        """The most recent successfully delivered alert for this item, if any.
+
+        Its `price_pence` is the effective price the alert quoted; NULL on
+        rows written before the column existed.
+        """
+        return self.one(
+            "SELECT price_pence FROM notifications"
+            " WHERE item_id=? AND ok=1 AND kind='alert' ORDER BY id DESC LIMIT 1",
+            (item_id,),
         )
 
     def recent_notifications(self, limit: int = 25) -> list[sqlite3.Row]:

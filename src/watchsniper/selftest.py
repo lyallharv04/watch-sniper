@@ -593,6 +593,74 @@ class TestStorage(unittest.TestCase):
             db.close()
 
 
+class TestAlerting(unittest.TestCase):
+    """When a DEAL is worth a phone notification. No network: nothing is sent."""
+
+    def setUp(self):
+        from .db import Database
+        from .poller import Engine
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        self.engine = Engine(self.db, None)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def deal(self, pounds: str, **kw):
+        a = self.engine.valuer.assess(listing(price=parse_gbp(pounds), **kw))
+        self.assertEqual(a.verdict, "DEAL")
+        return a
+
+    def test_new_deal_alerts_once_at_the_same_price(self):
+        a = self.deal("60.00")
+        self.assertTrue(self.engine._should_notify(a, is_new=True))
+        self.db.log_notification("alert", True, "", a.listing.item_id, a.effective_price)
+        self.assertFalse(self.engine._should_notify(self.deal("60.00"), is_new=False))
+
+    def test_price_drop_below_the_alerted_price_re_alerts(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", True, "", a.listing.item_id, a.effective_price)
+        self.assertTrue(self.engine._should_notify(self.deal("59.99"), is_new=False))
+        self.assertFalse(self.engine._should_notify(self.deal("65.00"), is_new=False))
+
+    def test_the_latest_alert_is_the_baseline(self):
+        item = listing().item_id
+        self.db.log_notification("alert", True, "", item, parse_gbp("60.00"))
+        self.db.log_notification("alert", True, "", item, parse_gbp("50.00"))
+        self.assertFalse(self.engine._should_notify(self.deal("55.00"), is_new=False))
+
+    def test_a_failed_send_is_not_a_baseline(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", False, "", a.listing.item_id, a.effective_price)
+        self.assertTrue(self.engine._should_notify(a, is_new=True))
+
+    def test_alert_without_a_recorded_price_does_not_re_alert(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", True, "", a.listing.item_id, None)
+        self.assertFalse(self.engine._should_notify(self.deal("10.00"), is_new=False))
+
+    def test_old_notifications_table_gains_the_price_column(self):
+        import sqlite3
+
+        from .db import Database
+
+        path = Path(self.tmp.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.execute(
+            "CREATE TABLE notifications (id INTEGER PRIMARY KEY, at_utc TEXT NOT"
+            " NULL, kind TEXT NOT NULL, item_id TEXT, ok INTEGER NOT NULL,"
+            " detail TEXT NOT NULL DEFAULT '')"
+        )
+        old.commit()
+        old.close()
+        db = Database(path)
+        cols = {c["name"] for c in db.query("PRAGMA table_info(notifications)")}
+        self.assertIn("price_pence", cols)
+        db.close()
+
+
 class TestIncrements(unittest.TestCase):
     def test_next_bid_steps_up(self):
         inc = Increments.load()

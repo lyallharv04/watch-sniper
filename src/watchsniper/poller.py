@@ -155,8 +155,15 @@ class Engine:
     def _should_notify(self, a: Assessment, is_new: bool) -> bool:
         if not a.is_actionable:
             return False
-        if self.db.notified_recently(a.listing.item_id):
-            return False
+        last = self.db.last_alert(a.listing.item_id)
+        if last is not None:
+            # Already alerted: only a lower price than the one quoted is news.
+            # A pre-migration alert has no recorded price and never re-alerts.
+            return (
+                last["price_pence"] is not None
+                and a.effective_price is not None
+                and a.effective_price < last["price_pence"]
+            )
         # An auction seen again after a bid can become actionable when it was
         # not before, so notify on transition rather than only on first sight.
         return is_new or a.listing.is_auction
@@ -164,7 +171,9 @@ class Engine:
     def _notify(self, a: Assessment) -> None:
         note = notify.alert_for(a, self._item_url(a.listing.item_id))
         ok, detail = self.notifier.send(note)
-        self.db.log_notification("alert", ok, detail, a.listing.item_id)
+        self.db.log_notification(
+            "alert", ok, detail, a.listing.item_id, a.effective_price
+        )
 
     def _item_url(self, item_id: str) -> str:
         host = "localhost" if C.BIND_HOST in ("0.0.0.0", "127.0.0.1") else C.BIND_HOST
