@@ -140,18 +140,21 @@ NTFY_SERVER = env(
 
 # --- Service --------------------------------------------------------------
 
+# Registered with no default so `.env.example` does not carry the path of
+# whichever machine generated it; the fallback is applied here instead.
 DB_PATH = env(
     "DB_PATH",
-    str(ROOT / "watchsniper.db"),
+    None,
     "A writable path on the VPS. A single SQLite file; back it up by copying it.",
     "Defaults to watchsniper.db beside the code.",
-)
+) or str(ROOT / "watchsniper.db")
 BIND_HOST = env(
     "BIND_HOST",
     "127.0.0.1",
-    "Leave at 127.0.0.1 and reach the dashboard over an SSH tunnel or a "
-    "Tailscale/WireGuard address. Setting 0.0.0.0 publishes an unauthenticated "
-    "dashboard to the internet — there is no login and there is not meant to be.",
+    "Leave at 127.0.0.1. cloudflared reaches the dashboard on localhost and "
+    "Cloudflare Access does the authentication; the service itself has no "
+    "login. The systemd unit pins this to loopback. Setting 0.0.0.0 publishes "
+    "an unauthenticated dashboard to the internet.",
     "Defaults to loopback only.",
 )
 BIND_PORT = env_int("BIND_PORT", 8137, "Any free port.", "Defaults to 8137.")
