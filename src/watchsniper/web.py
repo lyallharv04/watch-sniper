@@ -15,10 +15,13 @@ edge authentication, and removing the exposure is a better fix than guarding it.
 
 from __future__ import annotations
 
+import functools
 import html
 import json
 import sqlite3
+import struct
 import urllib.parse
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config as C
@@ -119,9 +122,90 @@ def page(title: str, body: str, engine: Engine) -> bytes:
     nav = "".join(f'<a href="{h}">{e(t)}</a>' for h, t in NAV)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">
+<meta name="theme-color" content="{THEME_COLOR}">
+<link rel="icon" href="/icon-192.png"><link rel="apple-touch-icon" href="/icon-192.png">
 <title>{e(title)} — watch sniper</title><style>{CSS}</style></head><body>
 <header><h1>watch sniper</h1><nav>{nav}</nav></header>
-<main>{banner}{body}</main></body></html>""".encode()
+<main>{banner}{body}</main>
+<script>if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js")</script>
+</body></html>""".encode()
+
+
+# --------------------------------------------------------------------------
+# Installable app (PWA)
+#
+# Enough for a phone to offer "Install", and nothing more. The manifest is
+# linked with crossorigin="use-credentials" because the dashboard sits behind
+# Cloudflare Access, and without credentials the manifest fetch would get the
+# Access login page instead. The service worker caches nothing: every request
+# goes to the network, so what is on screen is always what the system decided.
+# --------------------------------------------------------------------------
+
+THEME_COLOR = "#2a5db0"
+ICON_SIZES = (192, 512)
+
+SERVICE_WORKER = """\
+// Installability only. No fetch handler and no cache: every request goes to
+// the network as if this file did not exist.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+"""
+
+
+def manifest_json() -> bytes:
+    return json.dumps(
+        {
+            "name": "watch sniper",
+            "short_name": "watch sniper",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#faf9f7",
+            "theme_color": THEME_COLOR,
+            "icons": [
+                {"src": f"/icon-{s}.png", "sizes": f"{s}x{s}", "type": "image/png"}
+                for s in ICON_SIZES
+            ],
+        }
+    ).encode()
+
+
+@functools.lru_cache(maxsize=None)
+def icon_png(size: int) -> bytes:
+    """A plain watch face — white ring and two hands on the accent colour.
+
+    Drawn here with zlib rather than shipped as a binary, so the project stays
+    standard-library only and has no image files to keep in step with the
+    theme. Integer geometry on doubled coordinates, so the centre is exact.
+    """
+    bg, fg = (0x2A, 0x5D, 0xB0), (0xFA, 0xF9, 0xF7)
+    c = size - 1  # centre, in doubled coordinates
+    outer, inner = size * 72 // 100, size * 58 // 100  # radii, doubled
+    hand = max(2, size // 24)  # half-width, doubled
+    rows = []
+    for y in range(size):
+        row = bytearray(b"\x00")  # filter byte: none
+        dy = 2 * y - c
+        for x in range(size):
+            dx = 2 * x - c
+            d2 = dx * dx + dy * dy
+            ring = inner * inner <= d2 <= outer * outer
+            minute = abs(dx) <= hand and -inner * 8 // 10 <= dy <= 0
+            hour = abs(dy) <= hand and 0 <= dx <= inner * 6 // 10
+            row += bytes(fg if ring or minute or hour else bg)
+        rows.append(bytes(row))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
+        + chunk(b"IEND", b"")
+    )
 
 
 # --------------------------------------------------------------------------
@@ -634,6 +718,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(page("Constants", render_constants(eng), eng))
             elif path == "/outcomes":
                 self._send(page("Outcomes", render_outcomes(eng), eng))
+            elif path == "/manifest.json":
+                self._send(manifest_json(), 200, "application/manifest+json")
+            elif path == "/sw.js":
+                self._send(SERVICE_WORKER.encode(), 200, "text/javascript")
+            elif path in {f"/icon-{s}.png" for s in ICON_SIZES}:
+                self._send(icon_png(int(path[6:-4])), 200, "image/png")
             elif path == "/api/health":
                 h = eng.health()
                 self._send(

@@ -927,6 +927,56 @@ class TestDashboard(unittest.TestCase):
         self.assertEqual(self.db.observed_closings()[key], (None, 0, 1))
 
 
+class TestInstallableApp(unittest.TestCase):
+    def test_manifest_lists_both_icons(self):
+        import json
+
+        from . import web
+
+        m = json.loads(web.manifest_json())
+        self.assertEqual(m["start_url"], "/")
+        self.assertEqual(m["display"], "standalone")
+        self.assertEqual(
+            {i["sizes"] for i in m["icons"]}, {f"{s}x{s}" for s in web.ICON_SIZES}
+        )
+
+    def test_icons_are_valid_pngs_of_the_stated_size(self):
+        import struct
+        import zlib
+
+        from . import web
+
+        for size in web.ICON_SIZES:
+            png = web.icon_png(size)
+            self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+            width, height = struct.unpack(">II", png[16:24])
+            self.assertEqual((width, height), (size, size))
+            idat_len = struct.unpack(">I", png[33:37])[0]
+            raw = zlib.decompress(png[41:41 + idat_len])
+            self.assertEqual(len(raw), size * (1 + 3 * size))
+
+    def test_service_worker_caches_nothing(self):
+        from . import web
+
+        self.assertNotIn("caches", web.SERVICE_WORKER)
+        self.assertNotIn('addEventListener("fetch"', web.SERVICE_WORKER)
+
+    def test_every_page_links_the_manifest_with_credentials(self):
+        from . import web
+        from .db import Database
+        from .poller import Engine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "t.db")
+            html = web.page("x", "", Engine(db, None)).decode()
+            db.close()
+        self.assertIn(
+            '<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">',
+            html,
+        )
+        self.assertIn('serviceWorker.register("/sw.js")', html)
+
+
 class TestAuctionPaging(unittest.TestCase):
     def sweep(self, hours: list[float]) -> tuple[_FakeClient, int]:
         from datetime import timedelta
