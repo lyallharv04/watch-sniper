@@ -202,7 +202,6 @@ def cmd_constants() -> int:
         ("EBAY_CATEGORY_IDS", str(C.EBAY_CATEGORY_IDS)),
         ("MIN_SELLER_FEEDBACK_PCT_X100", f"{C.MIN_SELLER_FEEDBACK_PCT_X100 / 100:.2f}%"),
         ("MIN_SELLER_FEEDBACK_SCORE", str(C.MIN_SELLER_FEEDBACK_SCORE)),
-        ("VAT_REGISTERED", str(C.VAT_REGISTERED)),
     ]
     width = max(len(n) for n, _ in rows)
     for name, value in rows:

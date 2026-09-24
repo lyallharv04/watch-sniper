@@ -275,6 +275,12 @@ class TestListingMapping(unittest.TestCase):
         parsed = from_item_summary({"itemId": "x", "buyingOptions": ["FIXED_PRICE"]})
         self.assertIsNone(parsed.shipping)
 
+    def test_missing_currency_is_not_assumed_gbp(self):
+        parsed = from_item_summary(
+            {"itemId": "x", "buyingOptions": ["FIXED_PRICE"], "price": {"value": "200"}}
+        )
+        self.assertEqual(parsed.currency, "")
+
     def test_datetimes_are_aware_utc(self):
         dt = parse_ts("2026-09-04T14:30:00.000Z")
         self.assertIsNotNone(dt.tzinfo)
@@ -365,10 +371,31 @@ class TestValuation(unittest.TestCase):
         self.assertEqual(bare.valuation.mab, stated.valuation.mab)
 
     def test_every_gate_is_recorded_even_when_one_fails(self):
-        a = self.v.assess(listing(item_location_country="DE"))
-        self.assertEqual(a.verdict, "REJECT_DOMESTIC")
-        self.assertGreaterEqual(len(a.gates), 6)
-        self.assertTrue(any(g.name == "BLACKLIST" for g in a.gates))
+        a = self.v.assess(listing(seller_feedback_pct_x100=8000))
+        self.assertEqual(a.verdict, "REJECT_SELLER")
+        self.assertEqual(
+            [g.name for g in a.gates],
+            ["CATALOGUE", "BLACKLIST", "SELLER", "VIABLE", "PRICE"],
+        )
+
+    def test_verdict_names_the_first_failure_in_evaluation_order(self):
+        a = self.v.assess(
+            listing(title="Rolex Submariner replica", seller_feedback_pct_x100=8000)
+        )
+        self.assertEqual(a.verdict, "REJECT_CATALOGUE")
+        self.assertEqual(len(a.failed_gates), 3)
+
+    def test_for_parts_condition_is_caught_by_the_blacklist(self):
+        a = self.v.assess(
+            listing(condition_id="7000", condition_raw="For parts or not working")
+        )
+        self.assertEqual(a.verdict, "REJECT_BLACKLIST")
+        self.assertIn("for_parts", a.primary_reason)
+
+    def test_missing_currency_rejects(self):
+        a = self.v.assess(listing(currency="", price=parse_gbp("60.00")))
+        self.assertEqual(a.verdict, "REJECT_PRICE")
+        self.assertIn("no currency", a.primary_reason)
 
     def test_unpriced_reference_rejects_with_a_reason(self):
         a = self.v.assess(listing(title="Rolex Submariner 116610LN"))

@@ -479,20 +479,13 @@ def render_constants(engine: Engine) -> str:
         ("SEARCH_MIN_PRICE", fmt(C.SEARCH_MIN_PRICE)),
         ("SEARCH_MAX_PRICE", fmt(C.SEARCH_MAX_PRICE)),
         ("EBAY_CATEGORY_IDS", C.EBAY_CATEGORY_IDS),
-        ("WEEKLY_SPEND_CAP", fmt(C.WEEKLY_SPEND_CAP)),
-        ("DAILY_BURST_CAP", fmt(C.DAILY_BURST_CAP)),
-        ("MAX_EXPOSURE_PER_REF", fmt(C.MAX_EXPOSURE_PER_REF)),
-        ("VAT_REGISTERED", C.VAT_REGISTERED),
     ]
     body = "".join(row(n, v) for n, v in items)
     return f"""
 <div class="card"><h2>Where these live</h2>
 <p>All of them in <code>src/watchsniper/config.py</code>, which is the only
 place any of them exists. This page reads that module — it does not restate it —
-so a value shown here cannot disagree with the value used to price a listing.</p>
-<p>The spend caps are displayed and <b>not enforced</b>, because nothing in
-Phase 1 can spend money. They are here so that the figure has one owner before
-anything needs to enforce it.</p></div>
+so a value shown here cannot disagree with the value used to price a listing.</p></div>
 <table><thead><tr><th>Constant</th><th class="num">Value</th>
 <th>What would settle it</th><th></th></tr></thead><tbody>{body}</tbody></table>"""
 

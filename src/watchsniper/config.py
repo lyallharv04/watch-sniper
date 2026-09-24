@@ -216,7 +216,6 @@ REG_OP_FEE_BP = 35
 AD_RATE_BP = 200
 ORDER_FEE = parse_gbp("0.30")
 
-VAT_REGISTERED = False
 FEE_VAT_MULT_BP = 12_000  # x1.20; not reclaimable while unregistered
 
 # --------------------------------------------------------------------------
@@ -268,19 +267,6 @@ COND_MULT = {
 
 MIN_SELLER_FEEDBACK_PCT_X100 = 9500  # 95.00%
 MIN_SELLER_FEEDBACK_SCORE = 15
-MAX_DOMESTIC_DELIVERY_DAYS = 7
-
-# --------------------------------------------------------------------------
-# Exposure. Phase 1 displays these; nothing enforces them because nothing in
-# Phase 1 can spend money. They are here so the display has one owner.
-# --------------------------------------------------------------------------
-
-WEEKLY_SPEND_CAP = parse_gbp("900.00")
-DAILY_BURST_CAP = parse_gbp("600.00")
-MAX_CONCURRENT_OPEN_BIDS = 3
-MAX_EXPOSURE_PER_REF = parse_gbp("800.00")
-VAT_THRESHOLD = parse_gbp("90000.00")
-VAT_THRESHOLD_WARN = parse_gbp("75000.00")
 
 # --------------------------------------------------------------------------
 # Unverified constants (requirement 19)
@@ -331,7 +317,6 @@ def valuation_fingerprint() -> str:
         INBOUND_POSTAGE_ESTIMATE,
         OUTBOUND_POSTAGE,
         sorted(COND_MULT.items()),
-        VAT_REGISTERED,
     ]
     return hashlib.sha256(repr(parts).encode()).hexdigest()[:12]
 

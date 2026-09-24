@@ -4,10 +4,9 @@ Two ideas run through this module.
 
 **Every gate is evaluated, always.** A listing that fails the seller check is
 still priced, and a listing with no FMV still records whether it would have
-passed the blacklist. The verdict names the first failure in cost order, but
-the full set is stored, because requirement 3 exists so that rejections can be
-debugged and a rejection with one reason attached tells you nothing about the
-other seven.
+passed the blacklist. The verdict names the first failure, but the full set is
+stored, because requirement 3 exists so that rejections can be debugged and a
+rejection with one reason attached tells you nothing about the others.
 
 **One valuation per listing.** The catalogue entry's FMV point — the midpoint
 where the entry carries a band — multiplied by the condition multiplier and
@@ -174,26 +173,10 @@ class Assessment:
         return self.verdict == "DEAL"
 
 
-#: Ordered as the gates are reported. A listing failing several is named by the
-#: first, because that is the one that explains the most about it.
-GATE_ORDER = (
-    "CATALOGUE",
-    "BLACKLIST",
-    "DOMESTIC",
-    "CONDITION",
-    "SELLER",
-    "CURRENCY",
-    "VIABLE",
-    "PRICE",
-)
-
 REASON_TEXT = {
     "CATALOGUE": "No catalogue entry matched the title, so there is no FMV to value against.",
     "BLACKLIST": "A blacklist rule fired.",
-    "DOMESTIC": "Not a UK-domestic listing.",
-    "CONDITION": "Condition rules it out.",
     "SELLER": "Seller feedback below the floor.",
-    "CURRENCY": "Priced in something other than GBP.",
     "VIABLE": "No bid at any price clears the profit floor.",
     "PRICE": "Priced above the maximum allowable bid.",
 }
@@ -216,45 +199,10 @@ class Valuer:
         self.increments = increments
 
     def assess(self, listing: Listing) -> Assessment:
+        """Evaluate every gate. The verdict names the first to fail, so they
+        are appended in the order that explains the most about a listing."""
         gates: list[Gate] = []
         caveats: list[str] = list(C.FEE_CAVEATS)
-
-        # -- gates that need nothing from the catalogue --------------------
-
-        hits = self.blacklist.check(listing.title)
-        gates.append(
-            Gate(
-                "BLACKLIST",
-                not hits,
-                "; ".join(f"{h.rule_id}: {h.matched!r}" for h in hits) or "clean",
-            )
-        )
-
-        domestic = listing.item_location_country == "GB"
-        gates.append(
-            Gate(
-                "DOMESTIC",
-                domestic,
-                f"itemLocation.country={listing.item_location_country or 'absent'}",
-            )
-        )
-
-        gbp = listing.currency == "GBP"
-        gates.append(Gate("CURRENCY", gbp, listing.currency or "absent"))
-
-        condition = read_condition(listing)
-        gates.append(
-            Gate(
-                "CONDITION",
-                condition != "FOR_PARTS",
-                f"{listing.condition_raw or 'unstated'}"
-                + ("" if condition else " (grade not settled)"),
-            )
-        )
-
-        gates.append(self._seller_gate(listing, caveats))
-
-        # -- the catalogue -------------------------------------------------
 
         match = self.catalogue.match(listing.title)
         gates.append(
@@ -267,10 +215,26 @@ class Valuer:
             )
         )
 
+        # The condition string goes through the blacklist as well as the
+        # title, so "For parts or not working" is caught by the for_parts rule.
+        # Checked separately so a negation window never spans the two.
+        hits = self.blacklist.check(listing.title) + self.blacklist.check(
+            listing.condition_raw
+        )
+        gates.append(
+            Gate(
+                "BLACKLIST",
+                not hits,
+                "; ".join(f"{h.rule_id}: {h.matched!r}" for h in hits) or "clean",
+            )
+        )
+
+        gates.append(self._seller_gate(listing, caveats))
+
         if match is None:
             return self._finish(listing, gates, caveats, None)
 
-        return self._value(listing, match, gates, caveats, condition)
+        return self._value(listing, match, gates, caveats, read_condition(listing))
 
     # -- helpers -----------------------------------------------------------
 
@@ -340,7 +304,7 @@ class Valuer:
                 price is not None and price <= valuation.mab,
                 f"{basis} {price}p vs MAB {valuation.mab}p"
                 if price is not None
-                else "no price on the listing",
+                else f"{basis}: no usable price on the listing",
             )
         )
 
@@ -365,6 +329,8 @@ class Valuer:
         """
         if listing.price is None:
             return None, "unpriced"
+        if not listing.currency:
+            return None, "no currency"
         if listing.is_auction:
             return (
                 self.increments.next_bid(listing.price, listing.bid_count or 0),
@@ -379,12 +345,10 @@ class Valuer:
         caveats: list[str],
         match: Match | None,
     ) -> Assessment:
-        by_name = {g.name: g for g in gates}
-        failed = [n for n in GATE_ORDER if n in by_name and not by_name[n].passed]
-        if failed:
-            first = failed[0]
-            verdict = f"REJECT_{first}"
-            reason = f"{REASON_TEXT[first]} {by_name[first].detail}"
+        first = next((g for g in gates if not g.passed), None)
+        if first:
+            verdict = f"REJECT_{first.name}"
+            reason = f"{REASON_TEXT[first.name]} {first.detail}"
         else:
             verdict = "DEAL"
             reason = "Clears every gate."
@@ -393,7 +357,7 @@ class Valuer:
             listing=listing,
             verdict=verdict,
             primary_reason=reason,
-            gates=[by_name[n] for n in GATE_ORDER if n in by_name],
+            gates=gates,
             caveats=sorted(set(caveats)),
             scope=read_scope(listing.title),
             bracelet=read_bracelet(listing.title),
