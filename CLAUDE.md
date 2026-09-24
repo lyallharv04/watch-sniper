@@ -35,6 +35,7 @@ One Python process. Three threads and an HTTP server.
    │ poller.Engine                                                │
    │   thread 1  Buy It Now sweep      sort=newlyListed           │
    │   thread 2  auction sweep         sort=endingSoonest         │
+   │             then closing prices   getItem, once per auction  │
    │   thread 3  watchdog — says so when 1 and 2 have stopped     │
    └───────────────────────────┬──────────────────────────────────┘
                                │ one compound query per sweep
@@ -53,13 +54,16 @@ One Python process. Three threads and an HTTP server.
                                ▼
               SQLite  ─────────┬─────────────────►  notify → ntfy → phone
                                ▼
-                   web  server-rendered HTML, no arithmetic
+                   web  server-rendered HTML, no arithmetic, installable
+                               │  loopback only
+                               ▼
+          cloudflared (own service) → Cloudflare Tunnel → Access → phone
 ```
 
-Nothing else. There is no message broker, no cache, no migration tool, no
-frontend build, no reverse proxy and no edge authentication. Each of those was
-considered and each is recorded as rejected in DECISIONS.md against a
-requirement, not against another component.
+Nothing else in the process. There is no message broker, no cache, no migration
+tool and no frontend build. Outside it, on the same host, `cloudflared` runs as
+its own service and Cloudflare Access does the authentication (§7, and
+`docs/DEPLOY.md`).
 
 ---
 
@@ -203,6 +207,18 @@ discard listings if you get them wrong:
 - eBay UK qualifies the generic pre-owned condition in the `condition` *string*
   while `conditionId` stays generic. The grade is in the string.
 
+### Closing prices
+
+After each auction sweep, every stored auction whose end time is more than
+`CLOSING_CHECK_DELAY` past is fetched once with Browse `getItem`, which keeps
+returning ended auctions with their final `currentBidPrice`, `bidCount` and
+`estimatedAvailabilities`. The `closings` table stores the final price, the bid
+count, whether it had bids, and `sold` (`estimatedSoldQuantity` above zero). An
+auction with bids that missed its reserve has bids and is not sold. An absent
+sold field is stored as unknown, never as unsold. A 404 is stored without a
+price so it is not retried; any other failure retries next sweep. Buy It Now
+disappearances are not tracked.
+
 **Limited Release APIs are not used and must not be.** The Offer API needs a
 user token, which is the one thing this system must not hold. The Order API is
 not obtainable. Marketplace Insights is closed to new applicants.
@@ -222,10 +238,37 @@ Requirement 8 is enforced three ways, deliberately of different kinds:
 The first two protect against the environment. Only the third protects against a
 future edit, and that is the one that matters in six months.
 
-The dashboard has no authentication and is not meant to. It binds to loopback
-and is reached over a tunnel or a private network. Do not give it a public
-hostname; that is the choice that forced the previous attempt into five layers
-of edge security defending a problem it had created.
+The dashboard itself has no authentication. It binds to loopback — the systemd
+unit sets `BIND_HOST` in the environment, which overrides `.env` — and is
+reached only through a token-based Cloudflare Tunnel, with `cloudflared`
+installed as its own service. Cloudflare Access in front of the tunnel's
+hostname is the only authentication, so the Access application must exist and
+cover the whole hostname before the hostname is routed. No inbound port is
+opened. The steps and their order are in `docs/DEPLOY.md`.
+
+---
+
+## 7a. Dashboard
+
+Two default views, both sorted by how far the price the gate used sits below
+the catalogue FMV (`below_fmv_bp`, computed in valuation and stored, so the web
+layer still does no arithmetic):
+
+- **Buy It Now** — `/`.
+- **Auctions ending within `AUCTION_ENDING_SOON`** — `/?view=auctions`.
+
+Both hide unmatched listings and `REJECT_BLACKLIST` by default. Choosing a
+verdict filters within the view; "everything" shows every listing in either
+format.
+
+The Catalogue page's **Observed** column is the median closing price of sold
+auctions per entry, with the count behind it, blank below
+`OBSERVED_MIN_AUCTIONS`; **Unsold** counts auctions that ended without a sale.
+Blacklist-rejected listings are excluded from both.
+
+The dashboard is an installable PWA: `/manifest.json` (linked with
+`crossorigin="use-credentials"` so the fetch carries the Access cookie), icons
+drawn in code, and a service worker that registers and caches nothing.
 
 ---
 
