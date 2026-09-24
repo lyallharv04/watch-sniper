@@ -82,8 +82,8 @@ background:var(--card);padding:1px 4px;border-radius:3px}
 """
 
 NAV = [
-    ("/", "Feed"),
-    ("/?verdict=DEAL", "Deals"),
+    ("/", "Buy It Now"),
+    ("/?view=auctions", "Auctions ending soon"),
     ("/catalogue", "Catalogue"),
     ("/missing", "Not priced"),
     ("/outcomes", "Outcomes"),
@@ -241,17 +241,34 @@ def label_buttons(item_id: str, existing: str | None) -> str:
 # --------------------------------------------------------------------------
 
 
+def span(td) -> str:
+    """A timedelta as words, for headings. Formatting only."""
+    hours = int(td.total_seconds() // 3600)
+    return f"{hours} hour{'' if hours == 1 else 's'}" if hours else str(td)
+
+
 def render_feed(engine: Engine, params: dict) -> str:
+    view = "auctions" if params.get("view", [""])[0] == "auctions" else "bin"
     verdict = params.get("verdict", [""])[0]
     brand = params.get("brand", [""])[0]
     q = params.get("q", [""])[0]
-    rows = engine.db.feed(verdict=verdict, brand=brand, query=q, limit=250)
+    rows = engine.db.feed(
+        view=view, verdict=verdict, brand=brand, query=q, limit=250,
+        ending_within=C.AUCTION_ENDING_SOON,
+    )
     counts = engine.db.verdict_counts()
+    heading = (
+        f"Auctions ending within {span(C.AUCTION_ENDING_SOON)}"
+        if view == "auctions"
+        else "Buy It Now"
+    )
+    if verdict == "all":
+        heading = "Everything"
 
     options = ["", "all", "DEAL"] + [
         r["verdict"] for r in counts if r["verdict"].startswith("REJECT_")
     ]
-    names = {"": "catalogue-matched", "all": "everything"}
+    names = {"": "matched, not blacklisted", "all": "everything"}
     opts = "".join(
         f"<option value='{e(o)}'{' selected' if o == verdict else ''}>"
         f"{e(names.get(o, o))}</option>"
@@ -265,7 +282,9 @@ def render_feed(engine: Engine, params: dict) -> str:
     tally = " · ".join(f"{e(r['verdict'])} {r['n']}" for r in counts) or "nothing yet"
 
     return f"""
+<h2 style="margin-top:0">{e(heading)}</h2>
 <form class="filters" method="get">
+  <input type="hidden" name="view" value="{e(view)}">
   <select name="verdict">{opts}</select>
   <select name="brand">{bopts}</select>
   <input name="q" placeholder="title contains" value="{e(q)}">
@@ -274,9 +293,10 @@ def render_feed(engine: Engine, params: dict) -> str:
 </form>
 {feed_table(rows)}
 <p class="dim">Sorted by how far the price the gate used sits below the catalogue
-FMV. Rejections are shown because they are how the blacklist and the FMV table
-get debugged. Scope and bracelet tags are read from the title and do not move
-the maximum bid.</p>"""
+FMV. Blacklist rejections are hidden unless you pick them or "everything";
+other rejections are shown because they are how the FMV table gets debugged.
+Scope and bracelet tags are read from the title and do not move the maximum
+bid.</p>"""
 
 
 def render_item(engine: Engine, item_id: str) -> str:
@@ -508,6 +528,7 @@ def render_constants(engine: Engine) -> str:
         ("AUCTION_HORIZON", str(C.AUCTION_HORIZON)),
         ("CLOSING_CHECK_DELAY", str(C.CLOSING_CHECK_DELAY)),
         ("OBSERVED_MIN_AUCTIONS", C.OBSERVED_MIN_AUCTIONS),
+        ("AUCTION_ENDING_SOON", str(C.AUCTION_ENDING_SOON)),
         ("EBAY_CATEGORY_IDS", C.EBAY_CATEGORY_IDS),
     ]
     body = "".join(row(n, v) for n, v in items)

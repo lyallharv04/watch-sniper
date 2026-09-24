@@ -843,15 +843,47 @@ class TestDashboard(unittest.TestCase):
         )
         self.assertIsNone(self.engine.valuer.assess(listing(title="Rolex")).below_fmv_bp)
 
-    def test_default_feed_is_matched_listings_furthest_below_fmv_first(self):
+    def test_default_feed_is_matched_bin_listings_furthest_below_fmv_first(self):
         self.add("cheap", price=parse_gbp("100.00"))
         self.add("dear", price=parse_gbp("300.00"))
         self.add("mid", price=parse_gbp("200.00"))
         self.add("unmatched", title="Rolex Submariner 116610LN")
+        self.add("strap", title="Tissot PRX Powermatic 80 bracelet for 40mm")
+        self.add("auction", is_auction=True, end_time_utc=utcnow())
         self.assertEqual(
             [r["item_id"] for r in self.db.feed()], ["cheap", "mid", "dear"]
         )
-        self.assertEqual(len(self.db.feed(verdict="all")), 4)
+        self.assertEqual(len(self.db.feed(verdict="all")), 6)
+        self.assertEqual(
+            [r["item_id"] for r in self.db.feed(verdict="REJECT_BLACKLIST")], ["strap"]
+        )
+
+    def test_auction_view_shows_only_auctions_ending_within_the_window(self):
+        from datetime import timedelta
+
+        now = utcnow()
+        window = C.AUCTION_ENDING_SOON
+        self.add("soon", is_auction=True, end_time_utc=now + window / 2,
+                 price=parse_gbp("100.00"))
+        self.add("sooner_dearer", is_auction=True, end_time_utc=now + window / 4,
+                 price=parse_gbp("200.00"))
+        self.add("later", is_auction=True, end_time_utc=now + window * 2)
+        self.add("ended", is_auction=True, end_time_utc=now - timedelta(minutes=1))
+        self.add("bin")
+        self.add("strap", is_auction=True, end_time_utc=now + window / 2,
+                 title="Tissot PRX Powermatic 80 bracelet for 40mm")
+        rows = self.db.feed(view="auctions", ending_within=window)
+        self.assertEqual([r["item_id"] for r in rows], ["soon", "sooner_dearer"])
+
+    def test_both_views_render(self):
+        from . import web
+
+        self.add("bin")
+        self.assertIn("Buy It Now", web.render_feed(self.engine, {}))
+        self.assertIn(
+            "Auctions ending within",
+            web.render_feed(self.engine, {"view": ["auctions"]}),
+        )
 
     def test_observed_median_counts_only_sold_auctions(self):
         prices = {"a": "300.00", "b": "340.00", "c": "320.00", "d": "360.00"}

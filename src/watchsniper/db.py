@@ -307,21 +307,34 @@ class Database:
     def feed(
         self,
         *,
+        view: str = "bin",
         verdict: str = "",
         brand: str = "",
         query: str = "",
         limit: int = 100,
         offset: int = 0,
+        ending_within: timedelta | None = None,
     ) -> list[sqlite3.Row]:
         """Listings with their verdicts, furthest below FMV first.
 
-        `verdict` "" (the default) means every catalogue-matched listing,
-        "all" means everything including unmatched, anything else is an exact
-        verdict. Unpriced and unmatched rows sort last, newest first.
+        `view` "bin" is Buy It Now; "auctions" is auctions ending between now
+        and `ending_within` from now. `verdict` "" (the default) means
+        catalogue-matched listings the blacklist did not reject; "all" means
+        everything, in either format, ignoring the view; anything else is an
+        exact verdict within the view. Unpriced rows sort last, newest first.
         """
         where, params = ["1=1"], []
+        if verdict != "all":
+            if view == "auctions":
+                now = utcnow().replace(microsecond=0)
+                where.append(
+                    "l.is_auction = 1 AND l.end_time_utc > ? AND l.end_time_utc <= ?"
+                )
+                params += [_iso(now), _iso(now + (ending_within or timedelta(0)))]
+            else:
+                where.append("l.is_auction = 0")
         if verdict == "":
-            where.append("v.catalogue_key <> ''")
+            where.append("v.catalogue_key <> '' AND v.verdict <> 'REJECT_BLACKLIST'")
         elif verdict != "all":
             where.append("v.verdict = ?")
             params.append(verdict)
