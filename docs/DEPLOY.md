@@ -3,13 +3,16 @@
 Written for someone executing it blind. Each step says what you should see, so
 you can tell a failure from a success without knowing the system.
 
-Target: an Ubuntu server (22.04 or 24.04) running continuously, reached from
-your phone through a Cloudflare Tunnel with Cloudflare Access in front of it.
+Target: a machine running **Ubuntu Desktop 26.04.1 LTS** continuously, reached
+from your phone through a Cloudflare Tunnel with Cloudflare Access in front of
+it. Desktop rather than Server changes two things, both handled in step 1: SSH
+is not installed by default, and the machine will go to sleep unless told not
+to.
 
 ```
 phone ──https──► Cloudflare Access (login) ──► Cloudflare Tunnel
                                                    │ outbound only
-                                     cloudflared service on the server
+                                     cloudflared service on the machine
                                                    │
                                      http://127.0.0.1:8137  watchsniper service
 ```
@@ -17,28 +20,57 @@ phone ──https──► Cloudflare Access (login) ──► Cloudflare Tunnel
 The service itself has **no login**. Access is the only thing between the
 dashboard and the internet, so the order below matters: the Access application
 is created *before* the public hostname exists, and the service never listens
-on anything but loopback. No inbound port is opened on the server.
+on anything but loopback. No inbound port is opened on the machine.
 
 Total time: about half an hour, plus however long you spend on step 11.
 
-You need: SSH access to the server with `sudo`, a domain on Cloudflare, and a
+You need: an account on the machine with `sudo`, a domain on Cloudflare, and a
 Cloudflare Zero Trust organisation (the free plan is enough).
 
 ---
 
-## 1. Packages
+## 1. The machine: SSH, Python, and no sleep
+
+Do this part at the machine itself, in a terminal.
+
+**Packages.** Ubuntu Desktop does not ship an SSH server or `curl`, so install
+them along with the rest:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 sqlite3 git
+sudo apt install -y openssh-server curl python3 sqlite3 git
+sudo systemctl enable --now ssh
 python3 --version
 ```
 
-Expect `Python 3.11` or later (Ubuntu 22.04 ships 3.10 — if you see that,
-`sudo apt install -y python3.11` and use `python3.11` wherever this guide says
-`python3`, including `ExecStart` in the unit file).
+Expect `active` from `systemctl is-active ssh`, and `Python 3.14` — the version
+26.04 ships, and the one the code has been checked against. From here on you can
+work over SSH from another machine: `ssh <you>@<machine's LAN address>`.
 
 There is nothing to `pip install`. The service uses only the standard library.
+
+**Never sleep.** Turn off suspend and hibernate for the whole system:
+
+```bash
+sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+systemctl status sleep.target --no-pager
+```
+
+Expect `Loaded: masked`. This matters on Desktop in a way it does not on
+Server. The "Automatic Suspend" switch in Settings only governs *your* logged-in
+session. When nobody is logged in — which is the normal state for this machine
+after a reboot — the login screen runs with its own power settings and will
+suspend the machine after a period of idleness. A suspended machine polls
+nothing, the watchdog cannot tell you because it is asleep too, and the tunnel
+goes down. Masking the targets makes every suspend request fail, whoever asks
+for it, including closing a laptop lid.
+
+**Nobody needs to be logged in.** The watch sniper and cloudflared both run as
+system services (steps 8 and 10), started by systemd at boot, before and
+independently of the graphical login. After a reboot or a power cut the machine
+is working again as soon as it has booted, sitting at the login screen. Do not
+set up automatic login for this; it is not needed and it leaves a desktop
+session open to anyone at the keyboard.
 
 ## 2. A user for the service
 
@@ -111,7 +143,7 @@ This makes four real API calls. Expect six numbered sections and, at the end,
 | 5. raw listing | one item summary, then the same listing parsed | Parsed fields showing `None` where the raw JSON has a value is a mapping bug. |
 | 6. auctions | a non-zero total | Most auctions having no `price` field is **normal and handled**. |
 
-A certificate error in section 1 on a server usually means a wrong clock —
+A certificate error in section 1 on this machine usually means a wrong clock —
 check `timedatectl`.
 
 ## 6. Seed the database
@@ -196,6 +228,23 @@ echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudf
   | sudo tee /etc/apt/sources.list.d/cloudflared.list
 sudo apt update && sudo apt install -y cloudflared
 ```
+
+The repository line says `any` rather than a release codename, so it should
+serve 26.04. If `apt update` reports that the repository has no Release file
+for your release, or `apt install` cannot find `cloudflared`, remove the list
+and install the package directly from Cloudflare's GitHub releases instead:
+
+```bash
+sudo rm -f /etc/apt/sources.list.d/cloudflared.list
+dpkg --print-architecture          # amd64 or arm64
+curl -fL -o /tmp/cloudflared.deb \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(dpkg --print-architecture).deb
+sudo apt install -y /tmp/cloudflared.deb
+cloudflared --version
+```
+
+Expect a version line. A package installed this way does not update with the
+rest of the system; repeat these commands occasionally to pick up new releases.
 
 **Install it as a service with the token:**
 
@@ -288,7 +337,7 @@ changed they are rebuilt by re-scoring, automatically.
 ## 15. Final check — from outside, on mobile data
 
 On your phone, turn Wi-Fi **off** so the request comes from the mobile
-network, not from anywhere near the server. Open a private (incognito) tab
+network, not from anywhere near the machine. Open a private (incognito) tab
 and go to the hostname, e.g. `https://watches.example.com`.
 
 Expect the **Cloudflare Access login page first** — the email one-time-PIN
@@ -306,7 +355,8 @@ step.
 
 | Symptom | Look at |
 |---|---|
-| Hostname shows Cloudflare error 502 or 1033 | The tunnel is up but the service is not answering: `systemctl status watchsniper`, then `curl -s http://127.0.0.1:8137/api/health` on the server. 1033 alone means cloudflared itself is down: `systemctl status cloudflared`. |
+| Hostname shows Cloudflare error 502 or 1033 | The tunnel is up but the service is not answering: `systemctl status watchsniper`, then `curl -s http://127.0.0.1:8137/api/health` on the machine. 1033 alone means cloudflared itself is down: `systemctl status cloudflared`. |
+| Everything stops overnight, then resumes when someone touches the machine | It went to sleep. `systemctl status sleep.target` must say `masked` — redo the sleep part of step 1 — and `journalctl -b | grep -i suspend` shows when it tried. |
 | Dashboard reachable without logging in | The Access application's domain does not match the public hostname. Fix it before anything else. |
 | Login loop on the phone | Clear the site's cookies in Chrome, or lengthen the Access session duration. |
 | No alerts for days | `/health`. If `stale` is false and polls are succeeding, this is a real finding about UK deal flow, not a fault. |
@@ -317,4 +367,4 @@ step.
 
 `/api/health` returns HTTP 503 when ingestion is stale. It sits behind Access
 like every other path, so an external uptime monitor needs an Access service
-token to reach it; on the server itself `curl` to `127.0.0.1` always works.
+token to reach it; on the machine itself `curl` to `127.0.0.1` always works.
