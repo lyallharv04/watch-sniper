@@ -249,14 +249,9 @@ MIN_ABSOLUTE_PROFIT = parse_gbp("75.00")
 INBOUND_POSTAGE_ESTIMATE = parse_gbp("5.00")
 OUTBOUND_POSTAGE = parse_gbp("9.50")
 
-# There is deliberately no service-buffer constant. The inherited model carried
-# both a bracelet multiplier and a flat "replace the bracelet" buffer, which
-# charges for the same defect twice. The multiplier does that job; a buffer
-# belongs to a *stated* fault, and Phase 1 does not read descriptions closely
-# enough to find one. See DECISIONS A12.
-
 # --------------------------------------------------------------------------
-# Valuation multipliers, per 10,000
+# Valuation multiplier, per 10,000. The only one: scope and bracelet are
+# labels, not multipliers. An unstated condition is valued as GOOD.
 # --------------------------------------------------------------------------
 
 COND_MULT = {
@@ -265,31 +260,6 @@ COND_MULT = {
     "GOOD": 8_400,
     "FAIR": 7_000,
     "FOR_PARTS": 0,
-}
-SCOPE_MULT = {
-    "FULL_SET": 10_000,
-    "WATCH_PAPERS": 9_500,
-    "WATCH_BOX": 9_400,
-    "WATCH_ONLY": 8_800,
-}
-BRACELET_MULT = {
-    "OEM_BRACELET": 10_000,
-    "OEM_STRAP": 9_500,
-    "AFTERMARKET": 8_800,
-}
-
-# What an unstated field is assumed to be at each end of the band. Most
-# listings state neither scope nor bracelet, so these two rows carry more of
-# the valuation error than the whole fee stack does.
-PESSIMISTIC_UNKNOWN = {
-    "condition": "GOOD",
-    "scope": "WATCH_ONLY",
-    "bracelet": "AFTERMARKET",
-}
-OPTIMISTIC_UNKNOWN = {
-    "condition": "EXCELLENT",
-    "scope": "FULL_SET",
-    "bracelet": "OEM_BRACELET",
 }
 
 # --------------------------------------------------------------------------
@@ -331,8 +301,6 @@ UNVERIFIED: dict[str, str] = {
     "quoted table is the USD one and does not apply.",
     "COND_MULT": "Nothing has checked these against realised sales. They are "
     "inherited estimates.",
-    "SCOPE_MULT": "As above.",
-    "BRACELET_MULT": "As above.",
     "INBOUND_POSTAGE_ESTIMATE": "Your own purchase records.",
     "OUTBOUND_POSTAGE": "Your own postage receipts.",
     "EBAY_CATEGORY_IDS": "`python -m watchsniper diagnose` — it reports "
@@ -363,10 +331,6 @@ def valuation_fingerprint() -> str:
         INBOUND_POSTAGE_ESTIMATE,
         OUTBOUND_POSTAGE,
         sorted(COND_MULT.items()),
-        sorted(SCOPE_MULT.items()),
-        sorted(BRACELET_MULT.items()),
-        sorted(PESSIMISTIC_UNKNOWN.items()),
-        sorted(OPTIMISTIC_UNKNOWN.items()),
         VAT_REGISTERED,
     ]
     return hashlib.sha256(repr(parts).encode()).hexdigest()[:12]

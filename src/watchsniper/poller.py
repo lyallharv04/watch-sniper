@@ -24,8 +24,6 @@ from .ebay import BudgetExhausted, EbayClient, EbayError
 from .models import from_item_summary, utcnow
 from .valuation import Assessment, Valuer
 
-ALERT_VERDICTS = ("PASS", "DEPENDS_ON_UNKNOWNS")
-
 
 def _today() -> str:
     return utcnow().strftime("%Y-%m-%d")
@@ -56,6 +54,8 @@ class Engine:
         self._stop = threading.Event()
         self._stall_notified = False
         self.last_error: str | None = None
+        if db.verdicts_dropped:
+            self.rescore_all()
 
     def reload_catalogue(self) -> None:
         """Pick up an edit to catalogue.toml without a restart."""
@@ -153,7 +153,7 @@ class Engine:
         return result
 
     def _should_notify(self, a: Assessment, is_new: bool) -> bool:
-        if a.verdict not in ALERT_VERDICTS:
+        if not a.is_actionable:
             return False
         if self.db.notified_recently(a.listing.item_id):
             return False

@@ -53,19 +53,13 @@ tr:hover td{background:var(--card)}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;
 font-weight:600;letter-spacing:.02em;white-space:nowrap}
-.v-PASS{background:var(--pass);color:var(--bg)}
-.v-DEPENDS_ON_UNKNOWNS{background:var(--maybe);color:var(--bg)}
+.v-DEAL{background:var(--pass);color:var(--bg)}
 .chip.rej{background:transparent;color:var(--rej);border:1px solid var(--line)}
 .tag{font-size:10.5px;color:var(--dim);border:1px solid var(--line);
 border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap;
 display:inline-block}
 .tag.bad{color:var(--warn);border-color:var(--warn)}
 .dim{color:var(--dim)}
-.band{font-variant-numeric:tabular-nums;white-space:nowrap}
-.bar{display:inline-block;height:6px;border-radius:3px;background:var(--line);
-position:relative;width:120px;vertical-align:middle}
-.bar i{position:absolute;top:0;bottom:0;background:var(--maybe);border-radius:3px}
-.bar u{position:absolute;top:-3px;width:2px;height:12px;background:var(--fg)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;
 padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:13px;margin:0 0 10px;text-transform:uppercase;
@@ -89,7 +83,7 @@ background:var(--card);padding:1px 4px;border-radius:3px}
 
 NAV = [
     ("/", "Feed"),
-    ("/?verdict=actionable", "Worth a look"),
+    ("/?verdict=DEAL", "Deals"),
     ("/catalogue", "Catalogue"),
     ("/missing", "Not priced"),
     ("/outcomes", "Outcomes"),
@@ -136,31 +130,17 @@ def page(title: str, body: str, engine: Engine) -> bytes:
 
 
 def verdict_chip(verdict: str) -> str:
-    label = {"PASS": "PASS", "DEPENDS_ON_UNKNOWNS": "DEPENDS"}.get(
-        verdict, verdict.replace("REJECT_", "")
-    )
-    cls = f"v-{verdict}" if verdict in ("PASS", "DEPENDS_ON_UNKNOWNS") else "rej"
+    label = verdict.replace("REJECT_", "")
+    cls = "v-DEAL" if verdict == "DEAL" else "rej"
     return f'<span class="chip {cls}">{e(label)}</span>'
 
 
-def band_bar(price, mab_pess, mab_opt) -> str:
-    """A price against its pessimistic and optimistic bid ceilings.
-
-    Purely a rendering of three stored numbers into pixel offsets. It carries
-    no valuation logic; if the three numbers are wrong the bar is wrong, which
-    is the correct behaviour.
-    """
-    if price is None or mab_pess is None or mab_opt is None:
-        return '<span class="dim">—</span>'
-    span = max(mab_opt, price) * 1.15 or 1
-    left = 100 * mab_pess / span
-    width = max(1.0, 100 * (mab_opt - mab_pess) / span)
-    mark = min(99.0, 100 * price / span)
-    return (
-        f'<span class="bar" title="pessimistic {fmt(mab_pess)} · optimistic '
-        f'{fmt(mab_opt)} · price {fmt(price)}">'
-        f'<i style="left:{left:.1f}%;width:{width:.1f}%"></i>'
-        f'<u style="left:{mark:.1f}%"></u></span>'
+def listing_tags(scope: str | None, bracelet: str | None) -> str:
+    """Scope and bracelet as read from the title. Labels only; not valued."""
+    return "".join(
+        f'<span class="tag">{e(v.lower().replace("_", " "))}</span>'
+        for v in (scope, bracelet)
+        if v
     )
 
 
@@ -196,17 +176,16 @@ def feed_table(rows: list[sqlite3.Row]) -> str:
     out = [
         "<table><thead><tr><th>Verdict</th><th>Listing</th><th>Reference</th>"
         '<th class="num">Price</th><th class="num">Max bid</th>'
-        '<th>Band</th><th class="num">Headroom</th><th>Label</th></tr></thead><tbody>'
+        '<th class="num">Headroom</th><th>Label</th></tr></thead><tbody>'
     ]
     for r in rows:
         caveats = json.loads(r["caveats_json"] or "[]")
-        actionable = r["verdict"] in ("PASS", "DEPENDS_ON_UNKNOWNS")
-        cls = "" if actionable else ' class="muted-row"'
-        head = r["headroom_pess_pence"]
+        cls = "" if r["verdict"] == "DEAL" else ' class="muted-row"'
+        head = r["headroom_pence"]
         out.append(
             f"<tr{cls}><td>{verdict_chip(r['verdict'])}</td>"
             f"<td><a href='/item/{e(urllib.parse.quote(r['item_id']))}'>"
-            f"{e(r['title'][:88])}</a><br>"
+            f"{e(r['title'][:88])}</a> {listing_tags(r['scope'], r['bracelet'])}<br>"
             f"<span class='dim'>{'Auction' if r['is_auction'] else 'BIN'} · "
             f"{e(r['seller_account_type'].title() or 'seller type unknown')} · "
             f"{e(r['primary_reason'][:110])}</span></td>"
@@ -214,9 +193,7 @@ def feed_table(rows: list[sqlite3.Row]) -> str:
             f"{caveat_tags(caveats, only_important=True)}</td>"
             f"<td class='num'>{fmt(r['eff_price_pence'])}<br>"
             f"<span class='dim'>{e(r['price_basis'])}</span></td>"
-            f"<td class='num'>{fmt(r['mab_pess_pence'])}<br>"
-            f"<span class='dim'>opt {fmt(r['mab_opt_pence'])}</span></td>"
-            f"<td>{band_bar(r['eff_price_pence'], r['mab_pess_pence'], r['mab_opt_pence'])}</td>"
+            f"<td class='num'>{fmt(r['mab_pence'])}</td>"
             f"<td class='num'>{fmt(head) if head is not None else '—'}</td>"
             f"<td>{label_buttons(r['item_id'], r['labels'])}</td></tr>"
         )
@@ -263,7 +240,7 @@ def render_feed(engine: Engine, params: dict) -> str:
     rows = engine.db.feed(verdict=verdict, brand=brand, query=q, limit=250)
     counts = engine.db.verdict_counts()
 
-    options = ["", "actionable", "PASS", "DEPENDS_ON_UNKNOWNS"] + [
+    options = ["", "DEAL"] + [
         r["verdict"] for r in counts if r["verdict"].startswith("REJECT_")
     ]
     opts = "".join(
@@ -288,9 +265,8 @@ def render_feed(engine: Engine, params: dict) -> str:
 </form>
 {feed_table(rows)}
 <p class="dim">Rejections are shown because they are how the blacklist and the
-FMV table get debugged. The bar shows where the asking price sits against the
-pessimistic and optimistic bid ceilings — a wide bar is a data gap, not a
-deal.</p>"""
+FMV table get debugged. Scope and bracelet tags are read from the title and do
+not move the maximum bid.</p>"""
 
 
 def render_item(engine: Engine, item_id: str) -> str:
@@ -298,9 +274,8 @@ def render_item(engine: Engine, item_id: str) -> str:
     if row is None:
         return "<p>No such listing.</p>"
     caveats = json.loads(row["caveats_json"] or "[]")
-    unknown = json.loads(row["unknown_json"] or "[]")
     gates = json.loads(row["gates_json"] or "[]")
-    derivation = json.loads(row["derivation_json"] or "{}")
+    derivation = json.loads(row["derivation_json"] or "null")
 
     gate_rows = "".join(
         f"<tr><td>{'✓' if g['passed'] else '✗'}</td><td>{e(g['name'])}</td>"
@@ -308,23 +283,17 @@ def render_item(engine: Engine, item_id: str) -> str:
         for g in gates
     )
 
-    ledgers = []
-    for key in ("pessimistic", "optimistic"):
-        s = derivation.get(key)
-        if not s:
-            continue
+    ledger = ""
+    if derivation:
         lines = "".join(
             f"<tr><td>{e(label)}</td><td>{fmt(value)}</td></tr>"
-            for label, value in s["lines"]
+            for label, value in derivation["lines"]
         )
-        ledgers.append(
-            f"""<div class="card"><h2>{e(key)} valuation</h2>
-<p class="dim">Reference FMV {fmt(s['fmv_reference'])} ×
-{e(s['condition'])} × {e(s['scope'])} × {e(s['bracelet'])}
-= {fmt(s['effective_fmv'])} effective.
-{'Assumed, not stated: ' + e(', '.join(unknown)) if unknown else 'Every field was stated.'}</p>
+        assumed = "" if derivation["condition_stated"] else " (not stated, assumed)"
+        ledger = f"""<div class="card"><h2>Valuation</h2>
+<p class="dim">Reference FMV {fmt(derivation['fmv_reference'])} ×
+{e(derivation['condition'])}{assumed} = {fmt(derivation['effective_fmv'])} effective.</p>
 <table class="ledger">{lines}</table></div>"""
-        )
 
     labels = engine.db.labels_for(item_id)
     label_log = "".join(
@@ -350,6 +319,7 @@ def render_item(engine: Engine, item_id: str) -> str:
       <tr><td>Bids</td><td>{e(row['bid_count'] if row['bid_count'] is not None else '—')}</td></tr>
       <tr><td>Ends</td><td>{e((row['end_time_utc'] or '—')[:16])}</td></tr>
       <tr><td>Condition</td><td>{e(row['condition_raw'] or '—')}</td></tr>
+      <tr><td>Scope / bracelet</td><td>{listing_tags(row['scope'], row['bracelet']) or '—'}</td></tr>
       <tr><td>Location</td><td>{e(row['item_location_country'] or '—')}</td></tr>
     </table></div>
   <div class="card"><h2>Seller</h2>
@@ -363,14 +333,14 @@ def render_item(engine: Engine, item_id: str) -> str:
     <table class="ledger">
       <tr><td>Matched</td><td>{e(row['catalogue_display'] or 'none')}</td></tr>
       <tr><td>Key</td><td><code>{e(row['catalogue_key'] or '—')}</code></td></tr>
-      <tr><td>FMV band</td><td>{fmt(row['fmv_low_pence'])} – {fmt(row['fmv_high_pence'])}</td></tr>
+      <tr><td>FMV</td><td>{fmt(row['fmv_pence'])}</td></tr>
       <tr><td>Verified</td><td>{'yes' if row['fmv_verified'] else '<b>no — an estimate</b>'}</td></tr>
       <tr><td>Scored under</td><td><code>{e(row['config_fingerprint'])}</code></td></tr>
     </table></div>
 </div>
 
 <div class="card"><h2>Gates</h2><table>{gate_rows}</table></div>
-<div class="grid">{''.join(ledgers)}</div>
+{ledger}
 <div class="card"><h2>Your labels</h2><ul>{label_log}</ul></div>"""
 
 
@@ -409,8 +379,8 @@ def render_catalogue(engine: Engine) -> str:
     rows = "".join(
         f"<tr><td>{'✓' if r.verified else '<b>—</b>'}</td>"
         f"<td>{e(r.display)}</td><td><code>{e(r.key)}</code></td>"
-        f"<td class='num'>{fmt(r.fmv)}</td>"
-        f"<td class='num'>{fmt(r.fmv_low)} – {fmt(r.fmv_high)}</td>"
+        f"<td class='num'>{fmt(r.point)}</td>"
+        f"<td class='num'>{f'{fmt(r.fmv_low)} – {fmt(r.fmv_high)}' if r.is_band else ''}</td>"
         f"<td class='num'>{usage.get(r.key, 0)}</td>"
         f"<td class='dim'>{e(r.notes[:120])}</td></tr>"
         for r in refs
@@ -504,10 +474,6 @@ def render_constants(engine: Engine) -> str:
         ("INBOUND_POSTAGE_ESTIMATE", fmt(C.INBOUND_POSTAGE_ESTIMATE)),
         ("OUTBOUND_POSTAGE", fmt(C.OUTBOUND_POSTAGE)),
         ("COND_MULT", str(C.COND_MULT)),
-        ("SCOPE_MULT", str(C.SCOPE_MULT)),
-        ("BRACELET_MULT", str(C.BRACELET_MULT)),
-        ("PESSIMISTIC_UNKNOWN", str(C.PESSIMISTIC_UNKNOWN)),
-        ("OPTIMISTIC_UNKNOWN", str(C.OPTIMISTIC_UNKNOWN)),
         ("MIN_SELLER_FEEDBACK_PCT_X100", f"{C.MIN_SELLER_FEEDBACK_PCT_X100 / 100:.2f}%"),
         ("MIN_SELLER_FEEDBACK_SCORE", C.MIN_SELLER_FEEDBACK_SCORE),
         ("SEARCH_MIN_PRICE", fmt(C.SEARCH_MIN_PRICE)),

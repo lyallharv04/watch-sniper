@@ -97,23 +97,13 @@ def alert_for(a: Assessment, dashboard_url: str = "") -> Notification:
     because it spends the operator's trust on a guess.
     """
     price = fmt(a.effective_price)
-    mab = fmt(a.pessimistic.mab if a.pessimistic else None)
-    head = fmt(a.headroom_pessimistic)
+    mab = fmt(a.valuation.mab if a.valuation else None)
+    head = fmt(a.headroom)
 
-    if a.verdict == "PASS":
-        title = f"{a.catalogue_display} at {price}"
-        lead = f"Clears the pessimistic bid ceiling of {mab} by {head}."
-        tags = "watch"
-        priority = "high"
-    else:
-        title = f"Maybe: {a.catalogue_display} at {price}"
-        lead = (
-            f"Between the pessimistic ceiling {mab} and the optimistic "
-            f"{fmt(a.optimistic.mab if a.optimistic else None)}. "
-            f"Depends on {', '.join(a.unknown_fields) or 'the variant'}."
-        )
-        tags = "grey_question"
-        priority = "default"
+    title = f"{a.catalogue_display} at {price}"
+    lead = f"Under the maximum bid of {mab} by {head}."
+    tags = "watch"
+    priority = "high"
 
     lines = [
         lead,

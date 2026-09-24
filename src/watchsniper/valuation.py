@@ -9,14 +9,10 @@ the full set is stored, because requirement 3 exists so that rejections can be
 debugged and a rejection with one reason attached tells you nothing about the
 other seven.
 
-**Uncertainty is emitted, not resolved.** Most listings state neither scope of
-delivery nor bracelet type, and those unknowns move the valuation further than
-the entire fee stack does. Rather than assume a value and present a single
-confident number, every listing gets two: a pessimistic valuation where each
-unknown takes its worst plausible value, and an optimistic one where each takes
-its best. The pass/fail gate uses the pessimistic figure — we only claim a deal
-when it is a deal on the worst reading. The gap between the two is the size of
-the data gap, and it is shown as such.
+**One valuation per listing.** The catalogue entry's FMV point — the midpoint
+where the entry carries a band — multiplied by the condition multiplier and
+nothing else. Scope of delivery and bracelet type are read from the title and
+shown as labels, but they do not move the number.
 """
 
 from __future__ import annotations
@@ -27,9 +23,9 @@ from dataclasses import dataclass, field
 from . import config as C
 from .blacklist import Blacklist, Increments
 from .catalogue import Catalogue, Match
-from .fees import MaxBid, max_allowable_bid
+from .fees import MaxBid, effective_fmv, max_allowable_bid
 from .models import Listing
-from .money import Pence, compose_bp
+from .money import Pence
 
 # --------------------------------------------------------------------------
 # Reading the listing
@@ -120,14 +116,12 @@ def read_bracelet(title: str) -> str | None:
 
 
 @dataclass
-class Scenario:
-    """One end of the valuation band."""
+class Valuation:
+    """FMV point x condition, and the maximum bid solved from it."""
 
-    label: str
     fmv_reference: Pence
     condition: str
-    scope: str
-    bracelet: str
+    condition_stated: bool
     multiplier_bp: int
     effective_fmv: Pence
     bid: MaxBid
@@ -151,17 +145,16 @@ class Assessment:
     primary_reason: str
     gates: list[Gate]
     caveats: list[str]
-    unknown_fields: list[str]
+    scope: str | None = None
+    bracelet: str | None = None
     catalogue_key: str = ""
     catalogue_display: str = ""
     match_how: str = ""
     match_evidence: str = ""
     ambiguous_with: list[str] = field(default_factory=list)
     fmv_verified: bool = False
-    fmv_low: Pence = 0
-    fmv_high: Pence = 0
-    pessimistic: Scenario | None = None
-    optimistic: Scenario | None = None
+    fmv: Pence = 0
+    valuation: Valuation | None = None
     effective_price: Pence | None = None
     price_basis: str = ""
     config_fingerprint: str = ""
@@ -171,20 +164,14 @@ class Assessment:
         return [g for g in self.gates if not g.passed]
 
     @property
-    def headroom_pessimistic(self) -> Pence | None:
-        if self.pessimistic is None or self.effective_price is None:
+    def headroom(self) -> Pence | None:
+        if self.valuation is None or self.effective_price is None:
             return None
-        return self.pessimistic.mab - self.effective_price
-
-    @property
-    def headroom_optimistic(self) -> Pence | None:
-        if self.optimistic is None or self.effective_price is None:
-            return None
-        return self.optimistic.mab - self.effective_price
+        return self.valuation.mab - self.effective_price
 
     @property
     def is_actionable(self) -> bool:
-        return self.verdict == "PASS"
+        return self.verdict == "DEAL"
 
 
 #: Ordered as the gates are reported. A listing failing several is named by the
@@ -208,7 +195,7 @@ REASON_TEXT = {
     "SELLER": "Seller feedback below the floor.",
     "CURRENCY": "Priced in something other than GBP.",
     "VIABLE": "No bid at any price clears the profit floor.",
-    "PRICE": "Priced above the maximum allowable bid on the optimistic reading.",
+    "PRICE": "Priced above the maximum allowable bid.",
 }
 
 
@@ -231,7 +218,6 @@ class Valuer:
     def assess(self, listing: Listing) -> Assessment:
         gates: list[Gate] = []
         caveats: list[str] = list(C.FEE_CAVEATS)
-        unknown: list[str] = []
 
         # -- gates that need nothing from the catalogue --------------------
 
@@ -265,8 +251,6 @@ class Valuer:
                 + ("" if condition else " (grade not settled)"),
             )
         )
-        if condition is None:
-            unknown.append("condition")
 
         gates.append(self._seller_gate(listing, caveats))
 
@@ -284,9 +268,9 @@ class Valuer:
         )
 
         if match is None:
-            return self._finish(listing, gates, caveats, unknown, None)
+            return self._finish(listing, gates, caveats, None)
 
-        return self._value(listing, match, gates, caveats, unknown, condition)
+        return self._value(listing, match, gates, caveats, condition)
 
     # -- helpers -----------------------------------------------------------
 
@@ -312,117 +296,61 @@ class Valuer:
         match: Match,
         gates: list[Gate],
         caveats: list[str],
-        unknown: list[str],
         condition: str | None,
     ) -> Assessment:
         ref = match.reference
-        low, high = self.catalogue.band_for(match)
 
         if match.ambiguous_with:
             caveats.append("AMBIGUOUS_MATCH")
         if not ref.verified:
             caveats.append("FMV_UNVERIFIED")
-        if ref.is_band or low != high:
+        if ref.is_band:
             caveats.append("VARIANT_UNRESOLVED")
         if listing.is_auction and not self.increments.verified:
             caveats.append("BID_INCREMENTS_UNVERIFIED")
-
-        scope = read_scope(listing.title)
-        bracelet = read_bracelet(listing.title)
-        if scope is None:
-            unknown.append("scope")
-        if bracelet is None:
-            unknown.append("bracelet")
 
         inbound = listing.shipping
         if inbound is None:
             caveats.append("POSTAGE_UNKNOWN")
 
-        pess = self._scenario(
-            "pessimistic", low, condition, scope, bracelet, C.PESSIMISTIC_UNKNOWN,
-            listing, inbound,
-        )
-        opt = self._scenario(
-            "optimistic", high, condition, scope, bracelet, C.OPTIMISTIC_UNKNOWN,
-            listing, inbound,
+        # An unstated condition takes GOOD, the grade COND_MULT already fell
+        # back to; the derivation records that it was assumed.
+        cond = condition or "GOOD"
+        mult = C.COND_MULT.get(cond, C.COND_MULT["GOOD"])
+        effective = effective_fmv(ref.point, mult)
+        valuation = Valuation(
+            fmv_reference=ref.point,
+            condition=cond,
+            condition_stated=condition is not None,
+            multiplier_bp=mult,
+            effective_fmv=effective,
+            bid=max_allowable_bid(
+                effective,
+                business_seller=listing.is_business_seller,
+                inbound_postage=inbound,
+            ),
         )
 
         price, basis = self._effective_price(listing)
 
-        gates.append(
-            Gate(
-                "VIABLE",
-                opt.mab > 0,
-                f"optimistic MAB {opt.mab}p, pessimistic {pess.mab}p",
-            )
-        )
+        gates.append(Gate("VIABLE", valuation.mab > 0, f"MAB {valuation.mab}p"))
         gates.append(
             Gate(
                 "PRICE",
-                price is not None and price <= opt.mab,
-                f"{basis} {price}p vs optimistic MAB {opt.mab}p"
+                price is not None and price <= valuation.mab,
+                f"{basis} {price}p vs MAB {valuation.mab}p"
                 if price is not None
                 else "no price on the listing",
             )
         )
 
-        assessment = self._finish(listing, gates, caveats, unknown, match)
-        assessment.fmv_low = low
-        assessment.fmv_high = high
+        assessment = self._finish(listing, gates, caveats, match)
+        assessment.fmv = ref.point
         assessment.fmv_verified = ref.verified
-        assessment.pessimistic = pess
-        assessment.optimistic = opt
+        assessment.valuation = valuation
         assessment.effective_price = price
         assessment.price_basis = basis
-
-        # A listing that clears every gate is either a deal on the worst
-        # reading of its unknowns, or a deal only if those unknowns fall the
-        # right way. Those are different things and the operator is told which.
-        if assessment.verdict == "PASS" and price is not None and price > pess.mab:
-            assessment.verdict = "DEPENDS_ON_UNKNOWNS"
-            assessment.primary_reason = (
-                "Clears the optimistic maximum bid but not the pessimistic one. "
-                "Whether this is a deal depends on "
-                + (", ".join(unknown) if unknown else "an unresolved variant")
-                + "."
-            )
         return assessment
-
-    def _scenario(
-        self,
-        label: str,
-        fmv_reference: Pence,
-        condition: str | None,
-        scope: str | None,
-        bracelet: str | None,
-        defaults: dict[str, str],
-        listing: Listing,
-        inbound: Pence | None,
-    ) -> Scenario:
-        cond = condition or defaults["condition"]
-        scp = scope or defaults["scope"]
-        brc = bracelet or defaults["bracelet"]
-        mult = compose_bp(
-            C.COND_MULT.get(cond, C.COND_MULT["GOOD"]),
-            C.SCOPE_MULT.get(scp, C.SCOPE_MULT["WATCH_ONLY"]),
-            C.BRACELET_MULT.get(brc, C.BRACELET_MULT["AFTERMARKET"]),
-        )
-        effective = (fmv_reference * mult) // 10_000
-        bid = max_allowable_bid(
-            effective,
-            business_seller=listing.is_business_seller,
-            inbound_postage=inbound,
-        )
-        return Scenario(
-            label=label,
-            fmv_reference=fmv_reference,
-            condition=cond,
-            scope=scp,
-            bracelet=brc,
-            multiplier_bp=mult,
-            effective_fmv=effective,
-            bid=bid,
-        )
 
     def _effective_price(self, listing: Listing) -> tuple[Pence | None, str]:
         """What it would cost to be the winning party right now.
@@ -449,7 +377,6 @@ class Valuer:
         listing: Listing,
         gates: list[Gate],
         caveats: list[str],
-        unknown: list[str],
         match: Match | None,
     ) -> Assessment:
         by_name = {g.name: g for g in gates}
@@ -459,8 +386,8 @@ class Valuer:
             verdict = f"REJECT_{first}"
             reason = f"{REASON_TEXT[first]} {by_name[first].detail}"
         else:
-            verdict = "PASS"
-            reason = "Clears every gate on the pessimistic valuation."
+            verdict = "DEAL"
+            reason = "Clears every gate."
 
         return Assessment(
             listing=listing,
@@ -468,7 +395,8 @@ class Valuer:
             primary_reason=reason,
             gates=[by_name[n] for n in GATE_ORDER if n in by_name],
             caveats=sorted(set(caveats)),
-            unknown_fields=unknown,
+            scope=read_scope(listing.title),
+            bracelet=read_bracelet(listing.title),
             catalogue_key=match.reference.key if match else "",
             catalogue_display=match.reference.display if match else "",
             match_how=match.how if match else "",

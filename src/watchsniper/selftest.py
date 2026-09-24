@@ -214,11 +214,17 @@ class TestCatalogue(unittest.TestCase):
         m = self.cat.match("Tissot PRX Powermatic 80 40mm ice blue")
         self.assertEqual(m.reference.key, "T137.407.11.041.00")
 
-    def test_unsettled_prx_falls_to_the_wide_band(self):
+    def test_unsettled_prx_falls_to_the_banded_entry(self):
         m = self.cat.match("Tissot PRX 40mm steel integrated bracelet")
         self.assertEqual(m.reference.key, "PRX-UNSPECIFIED")
-        low, high = self.cat.band_for(m)
-        self.assertLess(low, high)
+        self.assertTrue(m.reference.is_band)
+
+    def test_banded_entry_values_at_the_midpoint(self):
+        for r in self.cat.references:
+            if r.is_band:
+                self.assertEqual(r.point, (r.fmv_low + r.fmv_high) // 2, r.key)
+            else:
+                self.assertEqual(r.point, r.fmv, r.key)
 
     def test_integra_alias_does_not_match_integrated(self):
         m = self.cat.match("Tissot PRX 40mm with integrated bracelet")
@@ -308,15 +314,16 @@ class TestFieldReading(unittest.TestCase):
                 text,
             )
 
-    def test_graded_condition_narrows_the_band(self):
+    def test_graded_condition_is_used_and_unstated_is_assumed_good(self):
         v = valuer()
         vague = v.assess(listing(condition_id="3000", condition_raw="Pre-owned"))
         graded = v.assess(
             listing(condition_id="3000", condition_raw="Pre-owned - Excellent")
         )
-        self.assertIn("condition", vague.unknown_fields)
-        self.assertNotIn("condition", graded.unknown_fields)
-        self.assertGreater(graded.pessimistic.mab, vague.pessimistic.mab)
+        self.assertFalse(vague.valuation.condition_stated)
+        self.assertEqual(vague.valuation.condition, "GOOD")
+        self.assertTrue(graded.valuation.condition_stated)
+        self.assertGreater(graded.valuation.mab, vague.valuation.mab)
 
     def test_scope(self):
         self.assertEqual(read_scope("PRX full set box and papers"), "FULL_SET")
@@ -333,22 +340,29 @@ class TestValuation(unittest.TestCase):
     def setUp(self):
         self.v = valuer()
 
-    def test_band_is_ordered(self):
-        a = self.v.assess(listing())
-        self.assertLessEqual(a.pessimistic.effective_fmv, a.optimistic.effective_fmv)
-        self.assertLessEqual(a.pessimistic.mab, a.optimistic.mab)
+    def test_effective_fmv_is_point_times_condition_only(self):
+        a = self.v.assess(listing(condition_raw="Pre-owned - Excellent"))
+        self.assertEqual(
+            a.valuation.effective_fmv,
+            mul_bp(a.fmv, C.COND_MULT["EXCELLENT"]),
+        )
 
-    def test_unknown_fields_are_named(self):
-        a = self.v.assess(listing(title="Tissot PRX Powermatic 80 40mm"))
-        self.assertIn("scope", a.unknown_fields)
-        self.assertIn("bracelet", a.unknown_fields)
+    def test_banded_reference_uses_the_midpoint(self):
+        a = self.v.assess(listing(title="Tissot PRX 40mm steel integrated bracelet"))
+        ref = Catalogue.load().by_key["PRX-UNSPECIFIED"]
+        self.assertEqual(a.fmv, (ref.fmv_low + ref.fmv_high) // 2)
+        self.assertIn("VARIANT_UNRESOLVED", a.caveats)
 
-    def test_stated_fields_are_not_assumed(self):
-        a = self.v.assess(
+    def test_scope_and_bracelet_are_labels_not_value(self):
+        bare = self.v.assess(listing(title="Tissot PRX Powermatic 80 40mm"))
+        stated = self.v.assess(
             listing(title="Tissot PRX Powermatic 80 40mm full set original bracelet")
         )
-        self.assertNotIn("scope", a.unknown_fields)
-        self.assertNotIn("bracelet", a.unknown_fields)
+        self.assertIsNone(bare.scope)
+        self.assertIsNone(bare.bracelet)
+        self.assertEqual(stated.scope, "FULL_SET")
+        self.assertEqual(stated.bracelet, "OEM_BRACELET")
+        self.assertEqual(bare.valuation.mab, stated.valuation.mab)
 
     def test_every_gate_is_recorded_even_when_one_fails(self):
         a = self.v.assess(listing(item_location_country="DE"))
@@ -370,17 +384,18 @@ class TestValuation(unittest.TestCase):
         for caveat in C.FEE_CAVEATS:
             self.assertIn(caveat, a.caveats)
 
-    def test_depends_on_unknowns_sits_between_the_two_ceilings(self):
-        a = self.v.assess(listing(price=parse_gbp("180.00")))
-        if a.verdict == "DEPENDS_ON_UNKNOWNS":
-            self.assertGreater(a.effective_price, a.pessimistic.mab)
-            self.assertLessEqual(a.effective_price, a.optimistic.mab)
-
-    def test_pass_clears_the_pessimistic_ceiling(self):
-        a = self.v.assess(listing(price=parse_gbp("60.00")))
+    def test_deal_is_at_or_under_the_max_bid(self):
         # £60 is below the search band but the valuation must still be coherent
-        if a.verdict == "PASS":
-            self.assertLessEqual(a.effective_price, a.pessimistic.mab)
+        a = self.v.assess(listing(price=parse_gbp("60.00")))
+        self.assertEqual(a.verdict, "DEAL")
+        self.assertLessEqual(a.effective_price, a.valuation.mab)
+
+    def test_one_penny_over_the_max_bid_rejects_on_price(self):
+        mab = self.v.assess(listing()).valuation.mab
+        self.assertEqual(self.v.assess(listing(price=mab)).verdict, "DEAL")
+        self.assertEqual(
+            self.v.assess(listing(price=mab + 1)).verdict, "REJECT_PRICE"
+        )
 
     def test_auction_uses_the_next_valid_bid(self):
         a = self.v.assess(
@@ -410,7 +425,7 @@ class TestValuation(unittest.TestCase):
     def test_business_seller_gets_the_no_buyer_protection_branch(self):
         private = self.v.assess(listing(seller_account_type="INDIVIDUAL"))
         business = self.v.assess(listing(seller_account_type="BUSINESS"))
-        self.assertGreater(business.pessimistic.mab, private.pessimistic.mab)
+        self.assertGreater(business.valuation.mab, private.valuation.mab)
 
     def test_bracelet_only_listing_is_dropped(self):
         a = self.v.assess(
@@ -424,12 +439,11 @@ class TestValuation(unittest.TestCase):
         a = self.v.assess(listing())
         for value in (
             a.effective_price,
-            a.pessimistic.mab,
-            a.optimistic.mab,
-            a.pessimistic.effective_fmv,
-            a.fmv_low,
-            a.fmv_high,
-            *(v for _, v in a.pessimistic.bid.lines),
+            a.valuation.mab,
+            a.valuation.effective_fmv,
+            a.fmv,
+            a.headroom,
+            *(v for _, v in a.valuation.bid.lines),
         ):
             self.assertIsInstance(value, int)
             self.assertNotIsInstance(value, bool)
@@ -521,6 +535,23 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(len(db.labels_for(item.item_id)), 1)
             feed = db.feed()
             self.assertEqual(len(feed), 1)
+            db.close()
+
+    def test_two_scenario_verdicts_table_is_dropped(self):
+        import sqlite3
+
+        from .db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.db"
+            old = sqlite3.connect(path)
+            old.execute("CREATE TABLE verdicts (item_id TEXT, mab_pess_pence INTEGER)")
+            old.commit()
+            old.close()
+            db = Database(path)
+            self.assertTrue(db.verdicts_dropped)
+            cols = {c["name"] for c in db.query("PRAGMA table_info(verdicts)")}
+            self.assertIn("mab_pence", cols)
             db.close()
 
     def test_money_columns_are_integers(self):

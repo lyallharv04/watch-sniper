@@ -54,20 +54,17 @@ CREATE TABLE IF NOT EXISTS verdicts (
     primary_reason      TEXT NOT NULL,
     gates_json          TEXT NOT NULL,
     caveats_json        TEXT NOT NULL,
-    unknown_json        TEXT NOT NULL,
+    scope               TEXT,
+    bracelet            TEXT,
     catalogue_key       TEXT NOT NULL,
     catalogue_display   TEXT NOT NULL,
     fmv_verified        INTEGER NOT NULL,
-    fmv_low_pence       INTEGER,
-    fmv_high_pence      INTEGER,
-    eff_fmv_pess_pence  INTEGER,
-    eff_fmv_opt_pence   INTEGER,
-    mab_pess_pence      INTEGER,
-    mab_opt_pence       INTEGER,
+    fmv_pence           INTEGER,
+    eff_fmv_pence       INTEGER,
+    mab_pence           INTEGER,
     price_pence         INTEGER,
     price_basis         TEXT NOT NULL,
-    headroom_pess_pence INTEGER,
-    headroom_opt_pence  INTEGER,
+    headroom_pence      INTEGER,
     derivation_json     TEXT NOT NULL,
     config_fingerprint  TEXT NOT NULL
 );
@@ -146,7 +143,17 @@ class Database:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        #: True when a verdicts table from the two-scenario model was dropped.
+        #: Verdicts are derived data; the engine rebuilds them by re-scoring.
+        self.verdicts_dropped = False
         with self._lock:
+            cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(verdicts)")
+            }
+            if "mab_pess_pence" in cols:
+                self._conn.execute("DROP TABLE verdicts")
+                self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
             self._conn.commit()
 
@@ -217,41 +224,32 @@ class Database:
         return is_new
 
     def save_verdict(self, a: Assessment) -> None:
-        derivation = {
-            "pessimistic": _scenario_json(a.pessimistic),
-            "optimistic": _scenario_json(a.optimistic),
-        }
+        v = a.valuation
         self.execute(
             """
             INSERT INTO verdicts (
                 item_id, computed_at_utc, verdict, primary_reason, gates_json,
-                caveats_json, unknown_json, catalogue_key, catalogue_display,
-                fmv_verified, fmv_low_pence, fmv_high_pence,
-                eff_fmv_pess_pence, eff_fmv_opt_pence,
-                mab_pess_pence, mab_opt_pence, price_pence, price_basis,
-                headroom_pess_pence, headroom_opt_pence, derivation_json,
-                config_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                caveats_json, scope, bracelet, catalogue_key, catalogue_display,
+                fmv_verified, fmv_pence, eff_fmv_pence, mab_pence, price_pence,
+                price_basis, headroom_pence, derivation_json, config_fingerprint
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(item_id) DO UPDATE SET
                 computed_at_utc=excluded.computed_at_utc,
                 verdict=excluded.verdict,
                 primary_reason=excluded.primary_reason,
                 gates_json=excluded.gates_json,
                 caveats_json=excluded.caveats_json,
-                unknown_json=excluded.unknown_json,
+                scope=excluded.scope,
+                bracelet=excluded.bracelet,
                 catalogue_key=excluded.catalogue_key,
                 catalogue_display=excluded.catalogue_display,
                 fmv_verified=excluded.fmv_verified,
-                fmv_low_pence=excluded.fmv_low_pence,
-                fmv_high_pence=excluded.fmv_high_pence,
-                eff_fmv_pess_pence=excluded.eff_fmv_pess_pence,
-                eff_fmv_opt_pence=excluded.eff_fmv_opt_pence,
-                mab_pess_pence=excluded.mab_pess_pence,
-                mab_opt_pence=excluded.mab_opt_pence,
+                fmv_pence=excluded.fmv_pence,
+                eff_fmv_pence=excluded.eff_fmv_pence,
+                mab_pence=excluded.mab_pence,
                 price_pence=excluded.price_pence,
                 price_basis=excluded.price_basis,
-                headroom_pess_pence=excluded.headroom_pess_pence,
-                headroom_opt_pence=excluded.headroom_opt_pence,
+                headroom_pence=excluded.headroom_pence,
                 derivation_json=excluded.derivation_json,
                 config_fingerprint=excluded.config_fingerprint
             """,
@@ -262,21 +260,18 @@ class Database:
                 a.primary_reason,
                 json.dumps([g.__dict__ for g in a.gates]),
                 json.dumps(a.caveats),
-                json.dumps(a.unknown_fields),
+                a.scope,
+                a.bracelet,
                 a.catalogue_key,
                 a.catalogue_display,
                 int(a.fmv_verified),
-                a.fmv_low or None,
-                a.fmv_high or None,
-                a.pessimistic.effective_fmv if a.pessimistic else None,
-                a.optimistic.effective_fmv if a.optimistic else None,
-                a.pessimistic.mab if a.pessimistic else None,
-                a.optimistic.mab if a.optimistic else None,
+                a.fmv or None,
+                v.effective_fmv if v else None,
+                v.mab if v else None,
                 a.effective_price,
                 a.price_basis,
-                a.headroom_pessimistic,
-                a.headroom_optimistic,
-                json.dumps(derivation),
+                a.headroom,
+                json.dumps(_valuation_json(v)),
                 a.config_fingerprint,
             ),
         )
@@ -291,9 +286,7 @@ class Database:
         offset: int = 0,
     ) -> list[sqlite3.Row]:
         where, params = ["1=1"], []
-        if verdict == "actionable":
-            where.append("v.verdict IN ('PASS','DEPENDS_ON_UNKNOWNS')")
-        elif verdict:
+        if verdict:
             where.append("v.verdict = ?")
             params.append(verdict)
         if brand:
@@ -306,11 +299,9 @@ class Database:
         return self.query(
             f"""
             SELECT l.*, v.verdict, v.primary_reason, v.catalogue_display,
-                   v.catalogue_key, v.fmv_verified, v.fmv_low_pence,
-                   v.fmv_high_pence, v.mab_pess_pence, v.mab_opt_pence,
+                   v.catalogue_key, v.fmv_verified, v.fmv_pence, v.mab_pence,
                    v.price_pence AS eff_price_pence, v.price_basis,
-                   v.headroom_pess_pence, v.headroom_opt_pence,
-                   v.caveats_json, v.unknown_json,
+                   v.headroom_pence, v.caveats_json, v.scope, v.bracelet,
                    (SELECT group_concat(label) FROM labels
                      WHERE labels.item_id = l.item_id) AS labels
               FROM listings l JOIN verdicts v ON v.item_id = l.item_id
@@ -356,11 +347,9 @@ class Database:
         # differ exactly where the difference matters most.
         return self.one(
             "SELECT l.*, v.verdict, v.primary_reason, v.gates_json,"
-            " v.caveats_json, v.unknown_json, v.catalogue_key,"
-            " v.catalogue_display, v.fmv_verified, v.fmv_low_pence,"
-            " v.fmv_high_pence, v.mab_pess_pence, v.mab_opt_pence,"
-            " v.price_pence AS eff_price_pence, v.price_basis,"
-            " v.headroom_pess_pence, v.headroom_opt_pence,"
+            " v.caveats_json, v.scope, v.bracelet, v.catalogue_key,"
+            " v.catalogue_display, v.fmv_verified, v.fmv_pence, v.mab_pence,"
+            " v.price_pence AS eff_price_pence, v.price_basis, v.headroom_pence,"
             " v.derivation_json, v.config_fingerprint, v.computed_at_utc"
             " FROM listings l"
             " LEFT JOIN verdicts v ON v.item_id = l.item_id WHERE l.item_id = ?",
@@ -465,18 +454,16 @@ class Database:
         return self.query("SELECT * FROM listings ORDER BY first_seen_utc")
 
 
-def _scenario_json(s) -> dict | None:
-    if s is None:
+def _valuation_json(v) -> dict | None:
+    if v is None:
         return None
     return {
-        "label": s.label,
-        "fmv_reference": s.fmv_reference,
-        "condition": s.condition,
-        "scope": s.scope,
-        "bracelet": s.bracelet,
-        "multiplier_bp": s.multiplier_bp,
-        "effective_fmv": s.effective_fmv,
-        "lines": s.bid.lines,
+        "fmv_reference": v.fmv_reference,
+        "condition": v.condition,
+        "condition_stated": v.condition_stated,
+        "multiplier_bp": v.multiplier_bp,
+        "effective_fmv": v.effective_fmv,
+        "lines": v.bid.lines,
     }
 
 
