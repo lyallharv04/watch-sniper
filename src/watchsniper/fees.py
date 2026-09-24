@@ -47,12 +47,11 @@ class SellSide:
     platform_fees: Pence
     order_fee: Pence
     outbound_postage: Pence
-    service_buffer: Pence
     net_proceeds: Pence
     lines: list[tuple[str, Pence]] = field(default_factory=list)
 
 
-def sell_side(gross: Pence, *, service_buffer: Pence = 0) -> SellSide:
+def sell_side(gross: Pence) -> SellSide:
     """Net proceeds of selling one watch at `gross`.
 
     The final value fee, the regulatory operating fee and the promoted-listing
@@ -66,20 +65,18 @@ def sell_side(gross: Pence, *, service_buffer: Pence = 0) -> SellSide:
     vatted_bp = (rate_bp * C.FEE_VAT_MULT_BP) // 10_000
     platform = mul_bp_ceil(gross, vatted_bp)
     order = mul_bp_ceil(C.ORDER_FEE, C.FEE_VAT_MULT_BP)
-    net = gross - platform - order - C.OUTBOUND_POSTAGE - service_buffer
+    net = gross - platform - order - C.OUTBOUND_POSTAGE
     return SellSide(
         gross=gross,
         platform_fees=platform,
         order_fee=order,
         outbound_postage=C.OUTBOUND_POSTAGE,
-        service_buffer=service_buffer,
         net_proceeds=net,
         lines=[
             ("Sale price (effective FMV)", gross),
             (f"eBay fees @ {rate_bp / 100:.2f}% x VAT", -platform),
             ("Per-order fee inc. VAT", -order),
             ("Outbound postage", -C.OUTBOUND_POSTAGE),
-            ("Service buffer", -service_buffer),
             ("Net proceeds", net),
         ],
     )
@@ -106,7 +103,6 @@ def max_allowable_bid(
     *,
     business_seller: bool,
     inbound_postage: Pence | None = None,
-    service_buffer: Pence = 0,
 ) -> MaxBid:
     """The most that can be paid for the watch and still clear the profit floor.
 
@@ -125,7 +121,7 @@ def max_allowable_bid(
     justify that trade.
     """
     inbound = C.INBOUND_POSTAGE_ESTIMATE if inbound_postage is None else inbound_postage
-    sell = sell_side(effective_fmv, service_buffer=service_buffer)
+    sell = sell_side(effective_fmv)
     profit = required_profit(effective_fmv)
     budget = sell.net_proceeds - profit
     spendable = budget - inbound

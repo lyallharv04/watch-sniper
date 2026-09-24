@@ -6,10 +6,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=CHANGEME
+User=watchsniper
+Group=watchsniper
 WorkingDirectory=/opt/watchsniper
 Environment=PYTHONPATH=/opt/watchsniper/src
 Environment=PYTHONUNBUFFERED=1
+# Loopback only. cloudflared reaches it on localhost; nothing else should.
+# The real environment wins over .env, so this holds even if .env says
+# otherwise.
+Environment=BIND_HOST=127.0.0.1
 ExecStart=/usr/bin/python3 -m watchsniper serve
 Restart=always
 RestartSec=15

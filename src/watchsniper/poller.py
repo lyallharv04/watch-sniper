@@ -24,8 +24,6 @@ from .ebay import BudgetExhausted, EbayClient, EbayError
 from .models import from_item_summary, utcnow
 from .valuation import Assessment, Valuer
 
-ALERT_VERDICTS = ("PASS", "DEPENDS_ON_UNKNOWNS")
-
 
 def _today() -> str:
     return utcnow().strftime("%Y-%m-%d")
@@ -56,6 +54,8 @@ class Engine:
         self._stop = threading.Event()
         self._stall_notified = False
         self.last_error: str | None = None
+        if db.verdicts_dropped:
+            self.rescore_all()
 
     def reload_catalogue(self) -> None:
         """Pick up an edit to catalogue.toml without a restart."""
@@ -93,16 +93,23 @@ class Engine:
 
         A single 200-row `newlyListed` page reaches roughly twelve days back at
         the measured arrival rate, so one page per sweep is ample for catching
-        new listings; paging is only for the initial seed.
+        new Buy It Now listings; paging there is only for the initial seed.
+
+        The auction sweep is sorted ending-soonest, so one page covers only the
+        next few hundred endings. It keeps paging until the last row on a page
+        ends beyond AUCTION_HORIZON, so every auction ending inside the horizon
+        is seen on each sweep.
         """
         assert self.client is not None, "no eBay client configured"
         result = PollResult(kind=kind)
         run_id = self.db.start_poll(kind)
         before = self.client.budget.used
+        horizon = utcnow() + C.AUCTION_HORIZON
         try:
             sort = "newlyListed" if kind == "bin" else "endingSoonest"
             buying = "FIXED_PRICE" if kind == "bin" else "AUCTION"
-            for page_no in range(pages):
+            page_no = 0
+            while True:
                 page = self.client.search(
                     q=C.search_query(),
                     sort=sort,
@@ -115,6 +122,7 @@ class Engine:
                     day=_today(),
                 )
                 rows = page.get("itemSummaries") or []
+                listing = None
                 for row in rows:
                     result.items_seen += 1
                     listing = from_item_summary(row)
@@ -128,8 +136,21 @@ class Engine:
                         result.alerts += 1
                         if notify:
                             self._notify(assessment)
+                page_no += 1
                 if len(rows) < C.SEARCH_PAGE_LIMIT:
                     break
+                # Ending-soonest order: if the last row still ends inside the
+                # horizon, the next page may hold more that do.
+                inside_horizon = (
+                    kind == "auction"
+                    and listing is not None
+                    and listing.end_time_utc is not None
+                    and listing.end_time_utc <= horizon
+                )
+                if page_no >= pages and not inside_horizon:
+                    break
+            if kind == "auction":
+                self.record_closings()
             self.last_error = None
         except BudgetExhausted as exc:
             result.error = str(exc)
@@ -152,11 +173,63 @@ class Engine:
         )
         return result
 
+    def record_closings(self) -> int:
+        """Fetch each stored auction once, just after it ends, and keep the result.
+
+        Browse getItem keeps returning an ended auction with its final
+        `currentBidPrice` and `bidCount` (measured live on 2026-09-24), so the
+        closing price is read directly rather than inferred from the last bid
+        a sweep happened to see. An auction with no bids reports its starting
+        price and a null bid count; it is stored with `had_bids` false.
+
+        `sold` is eBay's `estimatedSoldQuantity` > 0. It is what separates a
+        sale from an auction that drew bids but missed its reserve. When the
+        field is absent it is stored as unknown, not as unsold.
+
+        A 404 is stored with no price so it is not retried. Any other failure
+        leaves the auction pending for the next sweep. BudgetExhausted
+        propagates to the sweep, which records it.
+        """
+        assert self.client is not None
+        done = 0
+        for item_id in self.db.auctions_awaiting_close(
+            utcnow() - C.CLOSING_CHECK_DELAY
+        ):
+            try:
+                row = self.client.get_item(item_id, day=_today())
+            except BudgetExhausted:
+                raise
+            except EbayError as exc:
+                if exc.status == 404:
+                    self.db.save_closing(item_id, None, 0, None, "HTTP 404")
+                    done += 1
+                continue
+            final = from_item_summary(row)
+            price = final.price if final.currency == "GBP" else None
+            availability = (row.get("estimatedAvailabilities") or [{}])[0]
+            sold_qty = availability.get("estimatedSoldQuantity")
+            self.db.save_closing(
+                item_id,
+                price,
+                final.bid_count or 0,
+                None if sold_qty is None else int(sold_qty) > 0,
+                "" if price is not None else f"no GBP price ({final.currency or 'none'})",
+            )
+            done += 1
+        return done
+
     def _should_notify(self, a: Assessment, is_new: bool) -> bool:
-        if a.verdict not in ALERT_VERDICTS:
+        if not a.is_actionable:
             return False
-        if self.db.notified_recently(a.listing.item_id):
-            return False
+        last = self.db.last_alert(a.listing.item_id)
+        if last is not None:
+            # Already alerted: only a lower price than the one quoted is news.
+            # A pre-migration alert has no recorded price and never re-alerts.
+            return (
+                last["price_pence"] is not None
+                and a.effective_price is not None
+                and a.effective_price < last["price_pence"]
+            )
         # An auction seen again after a bid can become actionable when it was
         # not before, so notify on transition rather than only on first sight.
         return is_new or a.listing.is_auction
@@ -164,7 +237,9 @@ class Engine:
     def _notify(self, a: Assessment) -> None:
         note = notify.alert_for(a, self._item_url(a.listing.item_id))
         ok, detail = self.notifier.send(note)
-        self.db.log_notification("alert", ok, detail, a.listing.item_id)
+        self.db.log_notification(
+            "alert", ok, detail, a.listing.item_id, a.effective_price
+        )
 
     def _item_url(self, item_id: str) -> str:
         host = "localhost" if C.BIND_HOST in ("0.0.0.0", "127.0.0.1") else C.BIND_HOST

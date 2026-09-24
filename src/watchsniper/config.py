@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from .money import Pence, parse_gbp
@@ -139,18 +140,21 @@ NTFY_SERVER = env(
 
 # --- Service --------------------------------------------------------------
 
+# Registered with no default so `.env.example` does not carry the path of
+# whichever machine generated it; the fallback is applied here instead.
 DB_PATH = env(
     "DB_PATH",
-    str(ROOT / "watchsniper.db"),
+    None,
     "A writable path on the VPS. A single SQLite file; back it up by copying it.",
     "Defaults to watchsniper.db beside the code.",
-)
+) or str(ROOT / "watchsniper.db")
 BIND_HOST = env(
     "BIND_HOST",
     "127.0.0.1",
-    "Leave at 127.0.0.1 and reach the dashboard over an SSH tunnel or a "
-    "Tailscale/WireGuard address. Setting 0.0.0.0 publishes an unauthenticated "
-    "dashboard to the internet — there is no login and there is not meant to be.",
+    "Leave at 127.0.0.1. cloudflared reaches the dashboard on localhost and "
+    "Cloudflare Access does the authentication; the service itself has no "
+    "login. The systemd unit pins this to loopback. Setting 0.0.0.0 publishes "
+    "an unauthenticated dashboard to the internet.",
     "Defaults to loopback only.",
 )
 BIND_PORT = env_int("BIND_PORT", 8137, "Any free port.", "Defaults to 8137.")
@@ -193,6 +197,18 @@ SEARCH_BRANDS = (
     "Sinn",
 )
 SEARCH_PAGE_LIMIT = 200
+# The auction sweep pages through ending-soonest results until it has seen
+# every auction ending within this window, so none is first seen at the end.
+AUCTION_HORIZON = timedelta(days=3)
+# How long after an auction's end time its closing price is fetched. getItem
+# keeps returning ended auctions with the final bid, so this only needs to be
+# long enough for eBay to settle the result.
+CLOSING_CHECK_DELAY = timedelta(minutes=5)
+# The dashboard's auction view shows auctions ending within this window.
+AUCTION_ENDING_SOON = timedelta(hours=6)
+# The catalogue page shows an observed median closing price only when at least
+# this many auctions sit behind it.
+OBSERVED_MIN_AUCTIONS = 3
 
 
 def search_query() -> str:
@@ -216,7 +232,6 @@ REG_OP_FEE_BP = 35
 AD_RATE_BP = 200
 ORDER_FEE = parse_gbp("0.30")
 
-VAT_REGISTERED = False
 FEE_VAT_MULT_BP = 12_000  # x1.20; not reclaimable while unregistered
 
 # --------------------------------------------------------------------------
@@ -249,14 +264,9 @@ MIN_ABSOLUTE_PROFIT = parse_gbp("75.00")
 INBOUND_POSTAGE_ESTIMATE = parse_gbp("5.00")
 OUTBOUND_POSTAGE = parse_gbp("9.50")
 
-# There is deliberately no service-buffer constant. The inherited model carried
-# both a bracelet multiplier and a flat "replace the bracelet" buffer, which
-# charges for the same defect twice. The multiplier does that job; a buffer
-# belongs to a *stated* fault, and Phase 1 does not read descriptions closely
-# enough to find one. See DECISIONS A12.
-
 # --------------------------------------------------------------------------
-# Valuation multipliers, per 10,000
+# Valuation multiplier, per 10,000. The only one: scope and bracelet are
+# labels, not multipliers. An unstated condition is valued as GOOD.
 # --------------------------------------------------------------------------
 
 COND_MULT = {
@@ -266,31 +276,6 @@ COND_MULT = {
     "FAIR": 7_000,
     "FOR_PARTS": 0,
 }
-SCOPE_MULT = {
-    "FULL_SET": 10_000,
-    "WATCH_PAPERS": 9_500,
-    "WATCH_BOX": 9_400,
-    "WATCH_ONLY": 8_800,
-}
-BRACELET_MULT = {
-    "OEM_BRACELET": 10_000,
-    "OEM_STRAP": 9_500,
-    "AFTERMARKET": 8_800,
-}
-
-# What an unstated field is assumed to be at each end of the band. Most
-# listings state neither scope nor bracelet, so these two rows carry more of
-# the valuation error than the whole fee stack does.
-PESSIMISTIC_UNKNOWN = {
-    "condition": "GOOD",
-    "scope": "WATCH_ONLY",
-    "bracelet": "AFTERMARKET",
-}
-OPTIMISTIC_UNKNOWN = {
-    "condition": "EXCELLENT",
-    "scope": "FULL_SET",
-    "bracelet": "OEM_BRACELET",
-}
 
 # --------------------------------------------------------------------------
 # Seller guards
@@ -298,19 +283,6 @@ OPTIMISTIC_UNKNOWN = {
 
 MIN_SELLER_FEEDBACK_PCT_X100 = 9500  # 95.00%
 MIN_SELLER_FEEDBACK_SCORE = 15
-MAX_DOMESTIC_DELIVERY_DAYS = 7
-
-# --------------------------------------------------------------------------
-# Exposure. Phase 1 displays these; nothing enforces them because nothing in
-# Phase 1 can spend money. They are here so the display has one owner.
-# --------------------------------------------------------------------------
-
-WEEKLY_SPEND_CAP = parse_gbp("900.00")
-DAILY_BURST_CAP = parse_gbp("600.00")
-MAX_CONCURRENT_OPEN_BIDS = 3
-MAX_EXPOSURE_PER_REF = parse_gbp("800.00")
-VAT_THRESHOLD = parse_gbp("90000.00")
-VAT_THRESHOLD_WARN = parse_gbp("75000.00")
 
 # --------------------------------------------------------------------------
 # Unverified constants (requirement 19)
@@ -331,8 +303,6 @@ UNVERIFIED: dict[str, str] = {
     "quoted table is the USD one and does not apply.",
     "COND_MULT": "Nothing has checked these against realised sales. They are "
     "inherited estimates.",
-    "SCOPE_MULT": "As above.",
-    "BRACELET_MULT": "As above.",
     "INBOUND_POSTAGE_ESTIMATE": "Your own purchase records.",
     "OUTBOUND_POSTAGE": "Your own postage receipts.",
     "EBAY_CATEGORY_IDS": "`python -m watchsniper diagnose` — it reports "
@@ -363,11 +333,6 @@ def valuation_fingerprint() -> str:
         INBOUND_POSTAGE_ESTIMATE,
         OUTBOUND_POSTAGE,
         sorted(COND_MULT.items()),
-        sorted(SCOPE_MULT.items()),
-        sorted(BRACELET_MULT.items()),
-        sorted(PESSIMISTIC_UNKNOWN.items()),
-        sorted(OPTIMISTIC_UNKNOWN.items()),
-        VAT_REGISTERED,
     ]
     return hashlib.sha256(repr(parts).encode()).hexdigest()[:12]
 

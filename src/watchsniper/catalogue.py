@@ -37,6 +37,11 @@ class Reference:
         return self.fmv_low != self.fmv_high
 
     @property
+    def point(self) -> Pence:
+        """The single FMV a valuation uses: the band's midpoint, rounded down."""
+        return (self.fmv_low + self.fmv_high) // 2 if self.is_band else self.fmv
+
+    @property
     def display(self) -> str:
         return f"{self.brand} {self.model}"
 
@@ -116,9 +121,8 @@ class Catalogue:
 
         Scoring is `priority` first, then how the match was made, then the
         length of the longest alias that matched — a longer alias is a more
-        specific claim. Where two entries tie exactly, the result is reported
-        as ambiguous and the caller widens the valuation band to cover both
-        rather than silently picking one.
+        specific claim. Where two entries tie exactly, the first is used and
+        the others are reported as ambiguous so the dashboard can say so.
         """
         hay = _norm(title)
         scored: list[tuple[tuple[int, int, int], Reference, str, str]] = []
@@ -188,17 +192,3 @@ class Catalogue:
             groups.setdefault(key, []).append(title)
         ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
         return [(k, len(v), v[:3]) for k, v in ranked[:limit]]
-
-    def band_for(self, match: Match) -> tuple[Pence, Pence]:
-        """The FMV band to value against, widened across an ambiguous match.
-
-        An ambiguous match is a genuine data gap, not a coin toss. Widening
-        makes it visible in the dashboard as a wide band instead of hiding it
-        behind an arbitrary pick.
-        """
-        low, high = match.reference.fmv_low, match.reference.fmv_high
-        for key in match.ambiguous_with:
-            other = self.by_key[key]
-            low = min(low, other.fmv_low)
-            high = max(high, other.fmv_high)
-        return low, high

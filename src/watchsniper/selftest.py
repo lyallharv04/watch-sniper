@@ -214,11 +214,17 @@ class TestCatalogue(unittest.TestCase):
         m = self.cat.match("Tissot PRX Powermatic 80 40mm ice blue")
         self.assertEqual(m.reference.key, "T137.407.11.041.00")
 
-    def test_unsettled_prx_falls_to_the_wide_band(self):
+    def test_unsettled_prx_falls_to_the_banded_entry(self):
         m = self.cat.match("Tissot PRX 40mm steel integrated bracelet")
         self.assertEqual(m.reference.key, "PRX-UNSPECIFIED")
-        low, high = self.cat.band_for(m)
-        self.assertLess(low, high)
+        self.assertTrue(m.reference.is_band)
+
+    def test_banded_entry_values_at_the_midpoint(self):
+        for r in self.cat.references:
+            if r.is_band:
+                self.assertEqual(r.point, (r.fmv_low + r.fmv_high) // 2, r.key)
+            else:
+                self.assertEqual(r.point, r.fmv, r.key)
 
     def test_integra_alias_does_not_match_integrated(self):
         m = self.cat.match("Tissot PRX 40mm with integrated bracelet")
@@ -269,6 +275,12 @@ class TestListingMapping(unittest.TestCase):
         parsed = from_item_summary({"itemId": "x", "buyingOptions": ["FIXED_PRICE"]})
         self.assertIsNone(parsed.shipping)
 
+    def test_missing_currency_is_not_assumed_gbp(self):
+        parsed = from_item_summary(
+            {"itemId": "x", "buyingOptions": ["FIXED_PRICE"], "price": {"value": "200"}}
+        )
+        self.assertEqual(parsed.currency, "")
+
     def test_datetimes_are_aware_utc(self):
         dt = parse_ts("2026-09-04T14:30:00.000Z")
         self.assertIsNotNone(dt.tzinfo)
@@ -308,15 +320,16 @@ class TestFieldReading(unittest.TestCase):
                 text,
             )
 
-    def test_graded_condition_narrows_the_band(self):
+    def test_graded_condition_is_used_and_unstated_is_assumed_good(self):
         v = valuer()
         vague = v.assess(listing(condition_id="3000", condition_raw="Pre-owned"))
         graded = v.assess(
             listing(condition_id="3000", condition_raw="Pre-owned - Excellent")
         )
-        self.assertIn("condition", vague.unknown_fields)
-        self.assertNotIn("condition", graded.unknown_fields)
-        self.assertGreater(graded.pessimistic.mab, vague.pessimistic.mab)
+        self.assertFalse(vague.valuation.condition_stated)
+        self.assertEqual(vague.valuation.condition, "GOOD")
+        self.assertTrue(graded.valuation.condition_stated)
+        self.assertGreater(graded.valuation.mab, vague.valuation.mab)
 
     def test_scope(self):
         self.assertEqual(read_scope("PRX full set box and papers"), "FULL_SET")
@@ -333,28 +346,56 @@ class TestValuation(unittest.TestCase):
     def setUp(self):
         self.v = valuer()
 
-    def test_band_is_ordered(self):
-        a = self.v.assess(listing())
-        self.assertLessEqual(a.pessimistic.effective_fmv, a.optimistic.effective_fmv)
-        self.assertLessEqual(a.pessimistic.mab, a.optimistic.mab)
+    def test_effective_fmv_is_point_times_condition_only(self):
+        a = self.v.assess(listing(condition_raw="Pre-owned - Excellent"))
+        self.assertEqual(
+            a.valuation.effective_fmv,
+            mul_bp(a.fmv, C.COND_MULT["EXCELLENT"]),
+        )
 
-    def test_unknown_fields_are_named(self):
-        a = self.v.assess(listing(title="Tissot PRX Powermatic 80 40mm"))
-        self.assertIn("scope", a.unknown_fields)
-        self.assertIn("bracelet", a.unknown_fields)
+    def test_banded_reference_uses_the_midpoint(self):
+        a = self.v.assess(listing(title="Tissot PRX 40mm steel integrated bracelet"))
+        ref = Catalogue.load().by_key["PRX-UNSPECIFIED"]
+        self.assertEqual(a.fmv, (ref.fmv_low + ref.fmv_high) // 2)
+        self.assertIn("VARIANT_UNRESOLVED", a.caveats)
 
-    def test_stated_fields_are_not_assumed(self):
-        a = self.v.assess(
+    def test_scope_and_bracelet_are_labels_not_value(self):
+        bare = self.v.assess(listing(title="Tissot PRX Powermatic 80 40mm"))
+        stated = self.v.assess(
             listing(title="Tissot PRX Powermatic 80 40mm full set original bracelet")
         )
-        self.assertNotIn("scope", a.unknown_fields)
-        self.assertNotIn("bracelet", a.unknown_fields)
+        self.assertIsNone(bare.scope)
+        self.assertIsNone(bare.bracelet)
+        self.assertEqual(stated.scope, "FULL_SET")
+        self.assertEqual(stated.bracelet, "OEM_BRACELET")
+        self.assertEqual(bare.valuation.mab, stated.valuation.mab)
 
     def test_every_gate_is_recorded_even_when_one_fails(self):
-        a = self.v.assess(listing(item_location_country="DE"))
-        self.assertEqual(a.verdict, "REJECT_DOMESTIC")
-        self.assertGreaterEqual(len(a.gates), 6)
-        self.assertTrue(any(g.name == "BLACKLIST" for g in a.gates))
+        a = self.v.assess(listing(seller_feedback_pct_x100=8000))
+        self.assertEqual(a.verdict, "REJECT_SELLER")
+        self.assertEqual(
+            [g.name for g in a.gates],
+            ["CATALOGUE", "BLACKLIST", "SELLER", "VIABLE", "PRICE"],
+        )
+
+    def test_verdict_names_the_first_failure_in_evaluation_order(self):
+        a = self.v.assess(
+            listing(title="Rolex Submariner replica", seller_feedback_pct_x100=8000)
+        )
+        self.assertEqual(a.verdict, "REJECT_CATALOGUE")
+        self.assertEqual(len(a.failed_gates), 3)
+
+    def test_for_parts_condition_is_caught_by_the_blacklist(self):
+        a = self.v.assess(
+            listing(condition_id="7000", condition_raw="For parts or not working")
+        )
+        self.assertEqual(a.verdict, "REJECT_BLACKLIST")
+        self.assertIn("for_parts", a.primary_reason)
+
+    def test_missing_currency_rejects(self):
+        a = self.v.assess(listing(currency="", price=parse_gbp("60.00")))
+        self.assertEqual(a.verdict, "REJECT_PRICE")
+        self.assertIn("no currency", a.primary_reason)
 
     def test_unpriced_reference_rejects_with_a_reason(self):
         a = self.v.assess(listing(title="Rolex Submariner 116610LN"))
@@ -370,17 +411,18 @@ class TestValuation(unittest.TestCase):
         for caveat in C.FEE_CAVEATS:
             self.assertIn(caveat, a.caveats)
 
-    def test_depends_on_unknowns_sits_between_the_two_ceilings(self):
-        a = self.v.assess(listing(price=parse_gbp("180.00")))
-        if a.verdict == "DEPENDS_ON_UNKNOWNS":
-            self.assertGreater(a.effective_price, a.pessimistic.mab)
-            self.assertLessEqual(a.effective_price, a.optimistic.mab)
-
-    def test_pass_clears_the_pessimistic_ceiling(self):
-        a = self.v.assess(listing(price=parse_gbp("60.00")))
+    def test_deal_is_at_or_under_the_max_bid(self):
         # £60 is below the search band but the valuation must still be coherent
-        if a.verdict == "PASS":
-            self.assertLessEqual(a.effective_price, a.pessimistic.mab)
+        a = self.v.assess(listing(price=parse_gbp("60.00")))
+        self.assertEqual(a.verdict, "DEAL")
+        self.assertLessEqual(a.effective_price, a.valuation.mab)
+
+    def test_one_penny_over_the_max_bid_rejects_on_price(self):
+        mab = self.v.assess(listing()).valuation.mab
+        self.assertEqual(self.v.assess(listing(price=mab)).verdict, "DEAL")
+        self.assertEqual(
+            self.v.assess(listing(price=mab + 1)).verdict, "REJECT_PRICE"
+        )
 
     def test_auction_uses_the_next_valid_bid(self):
         a = self.v.assess(
@@ -410,7 +452,7 @@ class TestValuation(unittest.TestCase):
     def test_business_seller_gets_the_no_buyer_protection_branch(self):
         private = self.v.assess(listing(seller_account_type="INDIVIDUAL"))
         business = self.v.assess(listing(seller_account_type="BUSINESS"))
-        self.assertGreater(business.pessimistic.mab, private.pessimistic.mab)
+        self.assertGreater(business.valuation.mab, private.valuation.mab)
 
     def test_bracelet_only_listing_is_dropped(self):
         a = self.v.assess(
@@ -424,12 +466,11 @@ class TestValuation(unittest.TestCase):
         a = self.v.assess(listing())
         for value in (
             a.effective_price,
-            a.pessimistic.mab,
-            a.optimistic.mab,
-            a.pessimistic.effective_fmv,
-            a.fmv_low,
-            a.fmv_high,
-            *(v for _, v in a.pessimistic.bid.lines),
+            a.valuation.mab,
+            a.valuation.effective_fmv,
+            a.fmv,
+            a.headroom,
+            *(v for _, v in a.valuation.bid.lines),
         ):
             self.assertIsInstance(value, int)
             self.assertNotIsInstance(value, bool)
@@ -523,6 +564,23 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(len(feed), 1)
             db.close()
 
+    def test_two_scenario_verdicts_table_is_dropped(self):
+        import sqlite3
+
+        from .db import Database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.db"
+            old = sqlite3.connect(path)
+            old.execute("CREATE TABLE verdicts (item_id TEXT, mab_pess_pence INTEGER)")
+            old.commit()
+            old.close()
+            db = Database(path)
+            self.assertTrue(db.verdicts_dropped)
+            cols = {c["name"] for c in db.query("PRAGMA table_info(verdicts)")}
+            self.assertIn("mab_pence", cols)
+            db.close()
+
     def test_money_columns_are_integers(self):
         from .db import Database
 
@@ -533,6 +591,428 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(types["price_pence"], "INTEGER")
             self.assertEqual(types["shipping_pence"], "INTEGER")
             db.close()
+
+
+class TestAlerting(unittest.TestCase):
+    """When a DEAL is worth a phone notification. No network: nothing is sent."""
+
+    def setUp(self):
+        from .db import Database
+        from .poller import Engine
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        self.engine = Engine(self.db, None)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def deal(self, pounds: str, **kw):
+        a = self.engine.valuer.assess(listing(price=parse_gbp(pounds), **kw))
+        self.assertEqual(a.verdict, "DEAL")
+        return a
+
+    def test_new_deal_alerts_once_at_the_same_price(self):
+        a = self.deal("60.00")
+        self.assertTrue(self.engine._should_notify(a, is_new=True))
+        self.db.log_notification("alert", True, "", a.listing.item_id, a.effective_price)
+        self.assertFalse(self.engine._should_notify(self.deal("60.00"), is_new=False))
+
+    def test_price_drop_below_the_alerted_price_re_alerts(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", True, "", a.listing.item_id, a.effective_price)
+        self.assertTrue(self.engine._should_notify(self.deal("59.99"), is_new=False))
+        self.assertFalse(self.engine._should_notify(self.deal("65.00"), is_new=False))
+
+    def test_the_latest_alert_is_the_baseline(self):
+        item = listing().item_id
+        self.db.log_notification("alert", True, "", item, parse_gbp("60.00"))
+        self.db.log_notification("alert", True, "", item, parse_gbp("50.00"))
+        self.assertFalse(self.engine._should_notify(self.deal("55.00"), is_new=False))
+
+    def test_a_failed_send_is_not_a_baseline(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", False, "", a.listing.item_id, a.effective_price)
+        self.assertTrue(self.engine._should_notify(a, is_new=True))
+
+    def test_alert_without_a_recorded_price_does_not_re_alert(self):
+        a = self.deal("60.00")
+        self.db.log_notification("alert", True, "", a.listing.item_id, None)
+        self.assertFalse(self.engine._should_notify(self.deal("10.00"), is_new=False))
+
+    def test_old_notifications_table_gains_the_price_column(self):
+        import sqlite3
+
+        from .db import Database
+
+        path = Path(self.tmp.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.execute(
+            "CREATE TABLE notifications (id INTEGER PRIMARY KEY, at_utc TEXT NOT"
+            " NULL, kind TEXT NOT NULL, item_id TEXT, ok INTEGER NOT NULL,"
+            " detail TEXT NOT NULL DEFAULT '')"
+        )
+        old.commit()
+        old.close()
+        db = Database(path)
+        cols = {c["name"] for c in db.query("PRAGMA table_info(notifications)")}
+        self.assertIn("price_pence", cols)
+        db.close()
+
+
+class _FakeBudget:
+    used = 0
+
+
+class _FakeClient:
+    """Serves ending-soonest auction pages from a list; counts the calls."""
+
+    def __init__(self, end_times: list[datetime]):
+        self.end_times = end_times
+        self.budget = _FakeBudget()
+        self.offsets: list[int] = []
+
+    def search(self, *, offset: int, limit: int, **_kw) -> dict:
+        self.budget.used += 1
+        self.offsets.append(offset)
+        rows = [
+            {
+                "itemId": f"v1|{i}|0",
+                "title": "Hamilton Khaki Field",
+                "buyingOptions": ["AUCTION"],
+                "currentBidPrice": {"value": "150.00", "currency": "GBP"},
+                "itemEndDate": t.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            }
+            for i, t in enumerate(self.end_times[offset:offset + limit], start=offset)
+        ]
+        return {"itemSummaries": rows}
+
+
+class _FakeItemClient:
+    """get_item from a dict; a value that is an exception is raised."""
+
+    def __init__(self, items: dict):
+        self.items = items
+        self.budget = _FakeBudget()
+        self.fetched: list[str] = []
+
+    def get_item(self, item_id: str, *, day: str) -> dict:
+        self.budget.used += 1
+        self.fetched.append(item_id)
+        value = self.items[item_id]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+class TestClosings(unittest.TestCase):
+    def setUp(self):
+        from datetime import timedelta
+
+        from .db import Database
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        now = utcnow()
+        just_past = C.CLOSING_CHECK_DELAY + timedelta(minutes=1)
+        for item_id, ended_ago in (
+            ("sold", just_past),
+            ("unbid", just_past),
+            ("gone", just_past),
+            ("flaky", just_past),
+            ("too_soon", C.CLOSING_CHECK_DELAY - timedelta(minutes=1)),
+        ):
+            self.db.upsert_listing(
+                listing(item_id=item_id, is_auction=True, end_time_utc=now - ended_ago)
+            )
+        self.db.upsert_listing(
+            listing(item_id="bin", end_time_utc=now - timedelta(days=1))
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def run_closings(self, client):
+        from .poller import Engine
+
+        return Engine(self.db, client).record_closings()
+
+    def item(self, value: str, bids, sold: int | None = None):
+        row = {
+            "buyingOptions": ["AUCTION"],
+            "price": {"value": value, "currency": "GBP"},
+            "currentBidPrice": {"value": value, "currency": "GBP"},
+            "bidCount": bids,
+        }
+        if sold is not None:
+            row["estimatedAvailabilities"] = [{"estimatedSoldQuantity": sold}]
+        return row
+
+    def closings(self) -> dict:
+        return {r["item_id"]: dict(r) for r in self.db.query("SELECT * FROM closings")}
+
+    def test_records_final_price_and_bids_just_after_the_end(self):
+        from .ebay import EbayError
+
+        client = _FakeItemClient(
+            {
+                "sold": self.item("344.20", 12, sold=1),
+                "unbid": self.item("299.00", None, sold=0),
+                "gone": EbayError("not found", 404, ""),
+                "flaky": EbayError("server error", 503, ""),
+            }
+        )
+        self.assertEqual(self.run_closings(client), 3)
+        got = self.closings()
+        self.assertEqual(got["sold"]["final_price_pence"], 34420)
+        self.assertEqual(got["sold"]["bid_count"], 12)
+        self.assertEqual(got["sold"]["had_bids"], 1)
+        self.assertEqual(got["sold"]["sold"], 1)
+        self.assertEqual(got["unbid"]["had_bids"], 0)
+        self.assertEqual(got["unbid"]["sold"], 0)
+        self.assertIsNone(got["gone"]["final_price_pence"])
+        self.assertIsNone(got["gone"]["sold"])
+        self.assertNotIn("flaky", got)  # retried next sweep
+        self.assertNotIn("too_soon", got)  # inside CLOSING_CHECK_DELAY
+        self.assertNotIn("bin", client.fetched)  # Buy It Now is ignored
+
+    def test_bids_without_a_sale_is_unsold_and_missing_field_is_unknown(self):
+        client = _FakeItemClient(
+            {"sold": self.item("300.00", 4, sold=0), "unbid": self.item("1.00", None),
+             "gone": self.item("1.00", None), "flaky": self.item("1.00", None)}
+        )
+        self.run_closings(client)
+        got = self.closings()
+        self.assertEqual((got["sold"]["had_bids"], got["sold"]["sold"]), (1, 0))
+        self.assertIsNone(got["unbid"]["sold"])
+
+    def test_old_closings_table_gains_the_sold_column(self):
+        import sqlite3
+
+        from .db import Database
+
+        path = Path(self.tmp.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.execute(
+            "CREATE TABLE closings (item_id TEXT PRIMARY KEY, checked_at_utc TEXT"
+            " NOT NULL, final_price_pence INTEGER, bid_count INTEGER NOT NULL"
+            " DEFAULT 0, had_bids INTEGER NOT NULL, detail TEXT NOT NULL DEFAULT '')"
+        )
+        old.commit()
+        old.close()
+        db = Database(path)
+        cols = {c["name"] for c in db.query("PRAGMA table_info(closings)")}
+        self.assertIn("sold", cols)
+        db.close()
+
+    def test_each_auction_is_fetched_once(self):
+        client = _FakeItemClient(
+            {"sold": self.item("344.20", 12), "unbid": self.item("299.00", None),
+             "gone": self.item("1.00", None), "flaky": self.item("1.00", None)}
+        )
+        self.run_closings(client)
+        before = len(client.fetched)
+        self.run_closings(client)
+        self.assertEqual(len(client.fetched), before)
+
+
+class TestDashboard(unittest.TestCase):
+    def setUp(self):
+        from .db import Database
+        from .poller import Engine
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        self.engine = Engine(self.db, None)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def add(self, item_id: str, **kw):
+        item = listing(item_id=item_id, **kw)
+        self.db.upsert_listing(item)
+        self.engine.score(item)
+
+    def test_below_fmv_is_stored_in_basis_points_of_fmv(self):
+        a = self.engine.valuer.assess(listing(price=parse_gbp("100.00")))
+        self.assertEqual(
+            a.below_fmv_bp, (a.fmv - parse_gbp("100.00")) * 10_000 // a.fmv
+        )
+        self.assertIsNone(self.engine.valuer.assess(listing(title="Rolex")).below_fmv_bp)
+
+    def test_default_feed_is_matched_bin_listings_furthest_below_fmv_first(self):
+        self.add("cheap", price=parse_gbp("100.00"))
+        self.add("dear", price=parse_gbp("300.00"))
+        self.add("mid", price=parse_gbp("200.00"))
+        self.add("unmatched", title="Rolex Submariner 116610LN")
+        self.add("strap", title="Tissot PRX Powermatic 80 bracelet for 40mm")
+        self.add("auction", is_auction=True, end_time_utc=utcnow())
+        self.assertEqual(
+            [r["item_id"] for r in self.db.feed()], ["cheap", "mid", "dear"]
+        )
+        self.assertEqual(len(self.db.feed(verdict="all")), 6)
+        self.assertEqual(
+            [r["item_id"] for r in self.db.feed(verdict="REJECT_BLACKLIST")], ["strap"]
+        )
+
+    def test_auction_view_shows_only_auctions_ending_within_the_window(self):
+        from datetime import timedelta
+
+        now = utcnow()
+        window = C.AUCTION_ENDING_SOON
+        self.add("soon", is_auction=True, end_time_utc=now + window / 2,
+                 price=parse_gbp("100.00"))
+        self.add("sooner_dearer", is_auction=True, end_time_utc=now + window / 4,
+                 price=parse_gbp("200.00"))
+        self.add("later", is_auction=True, end_time_utc=now + window * 2)
+        self.add("ended", is_auction=True, end_time_utc=now - timedelta(minutes=1))
+        self.add("bin")
+        self.add("strap", is_auction=True, end_time_utc=now + window / 2,
+                 title="Tissot PRX Powermatic 80 bracelet for 40mm")
+        rows = self.db.feed(view="auctions", ending_within=window)
+        self.assertEqual([r["item_id"] for r in rows], ["soon", "sooner_dearer"])
+
+    def test_both_views_render(self):
+        from . import web
+
+        self.add("bin")
+        self.assertIn("Buy It Now", web.render_feed(self.engine, {}))
+        self.assertIn(
+            "Auctions ending within",
+            web.render_feed(self.engine, {"view": ["auctions"]}),
+        )
+
+    def test_observed_median_counts_only_sold_auctions(self):
+        prices = {"a": "300.00", "b": "340.00", "c": "320.00", "d": "360.00"}
+        for item_id, value in prices.items():
+            self.add(item_id, is_auction=True)
+            self.db.save_closing(item_id, parse_gbp(value), 5, True)
+        self.add("nobids", is_auction=True)
+        self.db.save_closing("nobids", parse_gbp("100.00"), 0, False)
+        self.add("reserve", is_auction=True)
+        self.db.save_closing("reserve", parse_gbp("150.00"), 6, False)
+        self.add("legacy", is_auction=True)
+        self.db.save_closing("legacy", parse_gbp("900.00"), 6, None)
+        self.add(
+            "strap", is_auction=True,
+            title="Tissot PRX Powermatic 80 bracelet for 40mm",
+        )
+        self.db.save_closing("strap", parse_gbp("50.00"), 3, True)
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        # even count: lower-rounded mean of 320 and 340; two unsold
+        self.assertEqual(
+            self.db.observed_closings()[key], (parse_gbp("330.00"), 4, 2)
+        )
+
+    def test_catalogue_page_hides_observed_under_the_minimum(self):
+        from . import web
+
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        for i in range(C.OBSERVED_MIN_AUCTIONS - 1):
+            self.add(f"x{i}", is_auction=True)
+            self.db.save_closing(f"x{i}", parse_gbp("123.45"), 2, True)
+        self.assertEqual(self.db.observed_closings()[key][1], C.OBSERVED_MIN_AUCTIONS - 1)
+        self.assertNotIn("£123.45", web.render_catalogue(self.engine))
+        self.add("last", is_auction=True)
+        self.db.save_closing("last", parse_gbp("123.45"), 2, True)
+        self.assertIn("£123.45", web.render_catalogue(self.engine))
+
+    def test_unsold_only_entry_shows_its_unsold_count(self):
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        self.add("u", is_auction=True)
+        self.db.save_closing("u", parse_gbp("99.00"), 0, False)
+        self.assertEqual(self.db.observed_closings()[key], (None, 0, 1))
+
+
+class TestInstallableApp(unittest.TestCase):
+    def test_manifest_lists_both_icons(self):
+        import json
+
+        from . import web
+
+        m = json.loads(web.manifest_json())
+        self.assertEqual(m["start_url"], "/")
+        self.assertEqual(m["display"], "standalone")
+        self.assertEqual(
+            {i["sizes"] for i in m["icons"]}, {f"{s}x{s}" for s in web.ICON_SIZES}
+        )
+
+    def test_icons_are_valid_pngs_of_the_stated_size(self):
+        import struct
+        import zlib
+
+        from . import web
+
+        for size in web.ICON_SIZES:
+            png = web.icon_png(size)
+            self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+            width, height = struct.unpack(">II", png[16:24])
+            self.assertEqual((width, height), (size, size))
+            idat_len = struct.unpack(">I", png[33:37])[0]
+            raw = zlib.decompress(png[41:41 + idat_len])
+            self.assertEqual(len(raw), size * (1 + 3 * size))
+
+    def test_service_worker_caches_nothing(self):
+        from . import web
+
+        self.assertNotIn("caches", web.SERVICE_WORKER)
+        self.assertNotIn('addEventListener("fetch"', web.SERVICE_WORKER)
+
+    def test_every_page_links_the_manifest_with_credentials(self):
+        from . import web
+        from .db import Database
+        from .poller import Engine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "t.db")
+            html = web.page("x", "", Engine(db, None)).decode()
+            db.close()
+        self.assertIn(
+            '<link rel="manifest" href="/manifest.json" crossorigin="use-credentials">',
+            html,
+        )
+        self.assertIn('serviceWorker.register("/sw.js")', html)
+
+
+class TestAuctionPaging(unittest.TestCase):
+    def sweep(self, hours: list[float]) -> tuple[_FakeClient, int]:
+        from datetime import timedelta
+
+        from .db import Database
+        from .poller import Engine
+
+        now = utcnow()
+        client = _FakeClient([now + timedelta(hours=h) for h in hours])
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "t.db")
+            engine = Engine(db, client)
+            engine.poll_once("auction", notify=False)
+            stored = len(db.all_listings())
+            db.close()
+        return client, stored
+
+    def test_pages_until_past_the_horizon(self):
+        limit = C.SEARCH_PAGE_LIMIT
+        horizon_h = C.AUCTION_HORIZON.total_seconds() / 3600
+        # Two and a half pages inside the horizon, then two pages beyond it.
+        inside = [horizon_h * i / (limit * 2.5 + 1) for i in range(int(limit * 2.5))]
+        beyond = [horizon_h + 1 + i for i in range(limit * 2)]
+        client, stored = self.sweep(inside + beyond)
+        self.assertEqual(client.offsets, [0, limit, limit * 2])
+        self.assertGreaterEqual(stored, len(inside))
+
+    def test_one_page_when_the_first_page_already_passes_the_horizon(self):
+        horizon_h = C.AUCTION_HORIZON.total_seconds() / 3600
+        client, _ = self.sweep([horizon_h + 1 + i for i in range(C.SEARCH_PAGE_LIMIT * 2)])
+        self.assertEqual(client.offsets, [0])
+
+    def test_stops_on_a_short_page(self):
+        client, stored = self.sweep([1.0] * 5)
+        self.assertEqual(client.offsets, [0])
+        self.assertEqual(stored, 5)
 
 
 class TestIncrements(unittest.TestCase):

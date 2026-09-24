@@ -9,15 +9,15 @@
 #
 #  WHAT `fmv` MEANS
 #  The realistic UK used sale price achievable within about 30 days for a
-#  MINT / FULL SET / OEM BRACELET example. It is the CEILING. The condition,
-#  scope and bracelet multipliers in config.py only ever adjust downward.
+#  MINT example. The condition multiplier in config.py only ever adjusts it
+#  downward.
 #
 #  `fmv_low` / `fmv_high` (optional)
 #  Where a title genuinely cannot tell you which variant you are looking at,
-#  give the band instead of pretending to a point. The system values the
-#  pessimistic end for the pass/fail gate and shows you the optimistic end so
-#  you can see the size of the data gap. Omit both when the reference is
-#  unambiguous; they then default to `fmv`.
+#  give the band instead of pretending to a point. The valuation then uses the
+#  MIDPOINT of the band and ignores `fmv` for that entry — edit the band, not
+#  `fmv`. Omit both when the reference is unambiguous; they then default to
+#  `fmv`.
 #
 #  HOW TO CURATE THIS  (requirement 22 — make it a sitting, not a chore)
 #    1.  `python -m watchsniper catalogue`  prints these rows ordered by how

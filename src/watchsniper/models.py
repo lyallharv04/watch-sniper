@@ -103,9 +103,11 @@ def from_item_summary(row: dict, *, fetched_at: datetime | None = None) -> Listi
     seller = row.get("seller") or {}
     loc = row.get("itemLocation") or {}
     cats = row.get("categories") or []
+    # Absent stays absent: a price with no stated currency is not a GBP price,
+    # and the valuation rejects it rather than assuming.
     currency = (row.get("price") or row.get("currentBidPrice") or {}).get(
-        "currency", "GBP"
-    )
+        "currency"
+    ) or ""
 
     return Listing(
         item_id=row.get("itemId", ""),
@@ -114,7 +116,7 @@ def from_item_summary(row: dict, *, fetched_at: datetime | None = None) -> Listi
         is_auction=is_auction,
         price=effective,
         shipping=shipping,
-        currency=currency or "GBP",
+        currency=currency,
         condition_raw=row.get("condition", "") or "",
         condition_id=str(row.get("conditionId", "") or ""),
         bid_count=row.get("bidCount"),

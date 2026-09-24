@@ -54,20 +54,18 @@ CREATE TABLE IF NOT EXISTS verdicts (
     primary_reason      TEXT NOT NULL,
     gates_json          TEXT NOT NULL,
     caveats_json        TEXT NOT NULL,
-    unknown_json        TEXT NOT NULL,
+    scope               TEXT,
+    bracelet            TEXT,
     catalogue_key       TEXT NOT NULL,
     catalogue_display   TEXT NOT NULL,
     fmv_verified        INTEGER NOT NULL,
-    fmv_low_pence       INTEGER,
-    fmv_high_pence      INTEGER,
-    eff_fmv_pess_pence  INTEGER,
-    eff_fmv_opt_pence   INTEGER,
-    mab_pess_pence      INTEGER,
-    mab_opt_pence       INTEGER,
+    fmv_pence           INTEGER,
+    eff_fmv_pence       INTEGER,
+    mab_pence           INTEGER,
     price_pence         INTEGER,
     price_basis         TEXT NOT NULL,
-    headroom_pess_pence INTEGER,
-    headroom_opt_pence  INTEGER,
+    headroom_pence      INTEGER,
+    below_fmv_bp        INTEGER,
     derivation_json     TEXT NOT NULL,
     config_fingerprint  TEXT NOT NULL
 );
@@ -97,6 +95,16 @@ CREATE TABLE IF NOT EXISTS outcomes (
     created_at_utc    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS closings (
+    item_id           TEXT PRIMARY KEY REFERENCES listings(item_id),
+    checked_at_utc    TEXT NOT NULL,
+    final_price_pence INTEGER,
+    bid_count         INTEGER NOT NULL DEFAULT 0,
+    had_bids          INTEGER NOT NULL,
+    detail            TEXT NOT NULL DEFAULT '',
+    sold              INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY,
     at_utc   TEXT NOT NULL,
@@ -124,7 +132,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     kind     TEXT NOT NULL,
     item_id  TEXT,
     ok       INTEGER NOT NULL,
-    detail   TEXT NOT NULL DEFAULT ''
+    detail   TEXT NOT NULL DEFAULT '',
+    price_pence INTEGER
 );
 """
 
@@ -146,8 +155,31 @@ class Database:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        #: True when a verdicts table in an older shape was dropped. Verdicts
+        #: are derived data; the engine rebuilds them by re-scoring.
+        self.verdicts_dropped = False
         with self._lock:
+            cols = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(verdicts)")
+            }
+            if cols and "below_fmv_bp" not in cols:
+                self._conn.execute("DROP TABLE verdicts")
+                self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
+            # Columns added after their tables; older files lack them.
+            for table, column in (
+                ("notifications", "price_pence"),
+                ("closings", "sold"),
+            ):
+                existing = {
+                    r["name"]
+                    for r in self._conn.execute(f"PRAGMA table_info({table})")
+                }
+                if column not in existing:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} INTEGER"
+                    )
             self._conn.commit()
 
     def close(self) -> None:
@@ -217,41 +249,34 @@ class Database:
         return is_new
 
     def save_verdict(self, a: Assessment) -> None:
-        derivation = {
-            "pessimistic": _scenario_json(a.pessimistic),
-            "optimistic": _scenario_json(a.optimistic),
-        }
+        v = a.valuation
         self.execute(
             """
             INSERT INTO verdicts (
                 item_id, computed_at_utc, verdict, primary_reason, gates_json,
-                caveats_json, unknown_json, catalogue_key, catalogue_display,
-                fmv_verified, fmv_low_pence, fmv_high_pence,
-                eff_fmv_pess_pence, eff_fmv_opt_pence,
-                mab_pess_pence, mab_opt_pence, price_pence, price_basis,
-                headroom_pess_pence, headroom_opt_pence, derivation_json,
+                caveats_json, scope, bracelet, catalogue_key, catalogue_display,
+                fmv_verified, fmv_pence, eff_fmv_pence, mab_pence, price_pence,
+                price_basis, headroom_pence, below_fmv_bp, derivation_json,
                 config_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(item_id) DO UPDATE SET
                 computed_at_utc=excluded.computed_at_utc,
                 verdict=excluded.verdict,
                 primary_reason=excluded.primary_reason,
                 gates_json=excluded.gates_json,
                 caveats_json=excluded.caveats_json,
-                unknown_json=excluded.unknown_json,
+                scope=excluded.scope,
+                bracelet=excluded.bracelet,
                 catalogue_key=excluded.catalogue_key,
                 catalogue_display=excluded.catalogue_display,
                 fmv_verified=excluded.fmv_verified,
-                fmv_low_pence=excluded.fmv_low_pence,
-                fmv_high_pence=excluded.fmv_high_pence,
-                eff_fmv_pess_pence=excluded.eff_fmv_pess_pence,
-                eff_fmv_opt_pence=excluded.eff_fmv_opt_pence,
-                mab_pess_pence=excluded.mab_pess_pence,
-                mab_opt_pence=excluded.mab_opt_pence,
+                fmv_pence=excluded.fmv_pence,
+                eff_fmv_pence=excluded.eff_fmv_pence,
+                mab_pence=excluded.mab_pence,
                 price_pence=excluded.price_pence,
                 price_basis=excluded.price_basis,
-                headroom_pess_pence=excluded.headroom_pess_pence,
-                headroom_opt_pence=excluded.headroom_opt_pence,
+                headroom_pence=excluded.headroom_pence,
+                below_fmv_bp=excluded.below_fmv_bp,
                 derivation_json=excluded.derivation_json,
                 config_fingerprint=excluded.config_fingerprint
             """,
@@ -262,21 +287,19 @@ class Database:
                 a.primary_reason,
                 json.dumps([g.__dict__ for g in a.gates]),
                 json.dumps(a.caveats),
-                json.dumps(a.unknown_fields),
+                a.scope,
+                a.bracelet,
                 a.catalogue_key,
                 a.catalogue_display,
                 int(a.fmv_verified),
-                a.fmv_low or None,
-                a.fmv_high or None,
-                a.pessimistic.effective_fmv if a.pessimistic else None,
-                a.optimistic.effective_fmv if a.optimistic else None,
-                a.pessimistic.mab if a.pessimistic else None,
-                a.optimistic.mab if a.optimistic else None,
+                a.fmv or None,
+                v.effective_fmv if v else None,
+                v.mab if v else None,
                 a.effective_price,
                 a.price_basis,
-                a.headroom_pessimistic,
-                a.headroom_optimistic,
-                json.dumps(derivation),
+                a.headroom,
+                a.below_fmv_bp,
+                json.dumps(_valuation_json(v)),
                 a.config_fingerprint,
             ),
         )
@@ -284,16 +307,35 @@ class Database:
     def feed(
         self,
         *,
+        view: str = "bin",
         verdict: str = "",
         brand: str = "",
         query: str = "",
         limit: int = 100,
         offset: int = 0,
+        ending_within: timedelta | None = None,
     ) -> list[sqlite3.Row]:
+        """Listings with their verdicts, furthest below FMV first.
+
+        `view` "bin" is Buy It Now; "auctions" is auctions ending between now
+        and `ending_within` from now. `verdict` "" (the default) means
+        catalogue-matched listings the blacklist did not reject; "all" means
+        everything, in either format, ignoring the view; anything else is an
+        exact verdict within the view. Unpriced rows sort last, newest first.
+        """
         where, params = ["1=1"], []
-        if verdict == "actionable":
-            where.append("v.verdict IN ('PASS','DEPENDS_ON_UNKNOWNS')")
-        elif verdict:
+        if verdict != "all":
+            if view == "auctions":
+                now = utcnow().replace(microsecond=0)
+                where.append(
+                    "l.is_auction = 1 AND l.end_time_utc > ? AND l.end_time_utc <= ?"
+                )
+                params += [_iso(now), _iso(now + (ending_within or timedelta(0)))]
+            else:
+                where.append("l.is_auction = 0")
+        if verdict == "":
+            where.append("v.catalogue_key <> '' AND v.verdict <> 'REJECT_BLACKLIST'")
+        elif verdict != "all":
             where.append("v.verdict = ?")
             params.append(verdict)
         if brand:
@@ -306,16 +348,16 @@ class Database:
         return self.query(
             f"""
             SELECT l.*, v.verdict, v.primary_reason, v.catalogue_display,
-                   v.catalogue_key, v.fmv_verified, v.fmv_low_pence,
-                   v.fmv_high_pence, v.mab_pess_pence, v.mab_opt_pence,
+                   v.catalogue_key, v.fmv_verified, v.fmv_pence, v.mab_pence,
                    v.price_pence AS eff_price_pence, v.price_basis,
-                   v.headroom_pess_pence, v.headroom_opt_pence,
-                   v.caveats_json, v.unknown_json,
+                   v.headroom_pence, v.below_fmv_bp, v.caveats_json, v.scope,
+                   v.bracelet,
                    (SELECT group_concat(label) FROM labels
                      WHERE labels.item_id = l.item_id) AS labels
               FROM listings l JOIN verdicts v ON v.item_id = l.item_id
              WHERE {' AND '.join(where)}
-             ORDER BY l.first_seen_utc DESC
+             ORDER BY v.below_fmv_bp IS NULL, v.below_fmv_bp DESC,
+                      l.first_seen_utc DESC
              LIMIT ? OFFSET ?
             """,
             params,
@@ -340,6 +382,42 @@ class Database:
         )
         return {r["catalogue_key"]: r["n"] for r in rows}
 
+    def observed_closings(self) -> dict[str, tuple[int | None, int, int]]:
+        """Per catalogue entry: (median sold price, sold count, unsold count).
+
+        The median counts only auctions eBay reports as sold with a GBP price;
+        an auction with bids that missed its reserve is unsold. Closings with
+        no sold field (stored before it was recorded) count as neither.
+        Listings the blacklist rejects are left out: a bracelet sold alone or
+        a custom dial matches the reference's name but is not the reference.
+        The median of an even count is the lower-rounded mean of the middle two.
+        """
+        prices: dict[str, list[int]] = {}
+        unsold: dict[str, int] = {}
+        for r in self.query(
+            "SELECT v.catalogue_key, c.final_price_pence, c.sold FROM closings c"
+            " JOIN verdicts v ON v.item_id = c.item_id"
+            " WHERE c.sold IS NOT NULL"
+            " AND v.catalogue_key <> '' AND v.verdict <> 'REJECT_BLACKLIST'"
+        ):
+            key = r["catalogue_key"]
+            if not r["sold"]:
+                unsold[key] = unsold.get(key, 0) + 1
+            elif r["final_price_pence"] is not None:
+                prices.setdefault(key, []).append(r["final_price_pence"])
+        out: dict[str, tuple[int | None, int, int]] = {}
+        for key in prices.keys() | unsold.keys():
+            values = sorted(prices.get(key, []))
+            mid = len(values) // 2
+            if not values:
+                median = None
+            elif len(values) % 2:
+                median = values[mid]
+            else:
+                median = (values[mid - 1] + values[mid]) // 2
+            out[key] = (median, len(values), unsold.get(key, 0))
+        return out
+
     def unmatched_titles(self) -> list[str]:
         return [
             r["title"]
@@ -356,11 +434,9 @@ class Database:
         # differ exactly where the difference matters most.
         return self.one(
             "SELECT l.*, v.verdict, v.primary_reason, v.gates_json,"
-            " v.caveats_json, v.unknown_json, v.catalogue_key,"
-            " v.catalogue_display, v.fmv_verified, v.fmv_low_pence,"
-            " v.fmv_high_pence, v.mab_pess_pence, v.mab_opt_pence,"
-            " v.price_pence AS eff_price_pence, v.price_basis,"
-            " v.headroom_pess_pence, v.headroom_opt_pence,"
+            " v.caveats_json, v.scope, v.bracelet, v.catalogue_key,"
+            " v.catalogue_display, v.fmv_verified, v.fmv_pence, v.mab_pence,"
+            " v.price_pence AS eff_price_pence, v.price_basis, v.headroom_pence,"
             " v.derivation_json, v.config_fingerprint, v.computed_at_utc"
             " FROM listings l"
             " LEFT JOIN verdicts v ON v.item_id = l.item_id WHERE l.item_id = ?",
@@ -440,20 +516,29 @@ class Database:
         )
 
     def log_notification(
-        self, kind: str, ok: bool, detail: str = "", item_id: str | None = None
+        self,
+        kind: str,
+        ok: bool,
+        detail: str = "",
+        item_id: str | None = None,
+        price: int | None = None,
     ) -> None:
         self.execute(
-            "INSERT INTO notifications (at_utc,kind,item_id,ok,detail)"
-            " VALUES (?,?,?,?,?)",
-            (_iso(utcnow()), kind, item_id, int(ok), detail),
+            "INSERT INTO notifications (at_utc,kind,item_id,ok,detail,price_pence)"
+            " VALUES (?,?,?,?,?,?)",
+            (_iso(utcnow()), kind, item_id, int(ok), detail, price),
         )
 
-    def notified_recently(self, item_id: str) -> bool:
-        return (
-            self.one(
-                "SELECT 1 FROM notifications WHERE item_id=? AND ok=1", (item_id,)
-            )
-            is not None
+    def last_alert(self, item_id: str) -> sqlite3.Row | None:
+        """The most recent successfully delivered alert for this item, if any.
+
+        Its `price_pence` is the effective price the alert quoted; NULL on
+        rows written before the column existed.
+        """
+        return self.one(
+            "SELECT price_pence FROM notifications"
+            " WHERE item_id=? AND ok=1 AND kind='alert' ORDER BY id DESC LIMIT 1",
+            (item_id,),
         )
 
     def recent_notifications(self, limit: int = 25) -> list[sqlite3.Row]:
@@ -461,22 +546,53 @@ class Database:
             "SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,)
         )
 
+    def auctions_awaiting_close(self, ended_before: datetime) -> list[str]:
+        """Stored auctions whose end time has passed and have no closing yet."""
+        cutoff = _iso(ended_before.replace(microsecond=0))
+        return [
+            r["item_id"]
+            for r in self.query(
+                "SELECT l.item_id FROM listings l"
+                " LEFT JOIN closings c ON c.item_id = l.item_id"
+                " WHERE l.is_auction = 1 AND c.item_id IS NULL"
+                " AND l.end_time_utc IS NOT NULL AND l.end_time_utc <= ?"
+                " ORDER BY l.end_time_utc",
+                (cutoff,),
+            )
+        ]
+
+    def save_closing(
+        self,
+        item_id: str,
+        final_price: int | None,
+        bid_count: int,
+        sold: bool | None,
+        detail: str = "",
+    ) -> None:
+        self.execute(
+            "INSERT OR REPLACE INTO closings (item_id,checked_at_utc,"
+            "final_price_pence,bid_count,had_bids,sold,detail)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                item_id, _iso(utcnow()), final_price, bid_count,
+                int(bid_count > 0), None if sold is None else int(sold), detail,
+            ),
+        )
+
     def all_listings(self) -> list[sqlite3.Row]:
         return self.query("SELECT * FROM listings ORDER BY first_seen_utc")
 
 
-def _scenario_json(s) -> dict | None:
-    if s is None:
+def _valuation_json(v) -> dict | None:
+    if v is None:
         return None
     return {
-        "label": s.label,
-        "fmv_reference": s.fmv_reference,
-        "condition": s.condition,
-        "scope": s.scope,
-        "bracelet": s.bracelet,
-        "multiplier_bp": s.multiplier_bp,
-        "effective_fmv": s.effective_fmv,
-        "lines": s.bid.lines,
+        "fmv_reference": v.fmv_reference,
+        "condition": v.condition,
+        "condition_stated": v.condition_stated,
+        "multiplier_bp": v.multiplier_bp,
+        "effective_fmv": v.effective_fmv,
+        "lines": v.bid.lines,
     }
 
 

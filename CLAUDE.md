@@ -35,6 +35,7 @@ One Python process. Three threads and an HTTP server.
    │ poller.Engine                                                │
    │   thread 1  Buy It Now sweep      sort=newlyListed           │
    │   thread 2  auction sweep         sort=endingSoonest         │
+   │             then closing prices   getItem, once per auction  │
    │   thread 3  watchdog — says so when 1 and 2 have stopped     │
    └───────────────────────────┬──────────────────────────────────┘
                                │ one compound query per sweep
@@ -47,41 +48,44 @@ One Python process. Three threads and an HTTP server.
    │   catalogue.match      title → reference, or nothing         │
    │   blacklist.check      negation-aware phrase rules           │
    │   every gate evaluated, all results kept                     │
-   │   two valuations: pessimistic and optimistic                 │
-   │   fees.max_allowable_bid — solved, per scenario              │
+   │   one valuation: FMV point × condition                       │
+   │   fees.max_allowable_bid — solved                            │
    └───────────────────────────┬──────────────────────────────────┘
                                ▼
               SQLite  ─────────┬─────────────────►  notify → ntfy → phone
                                ▼
-                   web  server-rendered HTML, no arithmetic
+                   web  server-rendered HTML, no arithmetic, installable
+                               │  loopback only
+                               ▼
+          cloudflared (own service) → Cloudflare Tunnel → Access → phone
 ```
 
-Nothing else. There is no message broker, no cache, no migration tool, no
-frontend build, no reverse proxy and no edge authentication. Each of those was
-considered and each is recorded as rejected in DECISIONS.md against a
-requirement, not against another component.
+Nothing else in the process. There is no message broker, no cache, no migration
+tool and no frontend build. Outside it, on the same host, `cloudflared` runs as
+its own service and Cloudflare Access does the authentication (§7, and
+`docs/DEPLOY.md`).
 
 ---
 
 ## 2. Valuation
 
-### The band
+### One valuation
 
-Most listings state neither scope of delivery nor bracelet type, and those
-unknowns move the number further than the whole fee stack does. So each listing
-is valued twice.
+Each listing is valued once.
 
-- **Pessimistic** — every unstated field takes its worst plausible value, and
-  the reference FMV takes the bottom of its band.
-- **Optimistic** — every unstated field takes its best, and the reference FMV
-  takes the top.
+- **FMV point** — the catalogue entry's `fmv`, or the midpoint of `fmv_low` and
+  `fmv_high` where the entry carries a band (rounded down).
+- **Condition** — the only multiplier, `COND_MULT`. The grade comes from the
+  condition string, then `conditionId`. An unstated grade is valued as `GOOD`,
+  and the item page says it was assumed.
 
-The gate uses the pessimistic figure. `PASS` therefore means *a deal even on the
-worst reading*. A listing clearing only the optimistic ceiling is
-`DEPENDS_ON_UNKNOWNS`, and the dashboard names the fields it depends on.
+Scope of delivery and bracelet type are still read from the title, stored and
+shown as tags on the dashboard. They are labels only and do not move the
+number.
 
-The width of the band is the uncertainty. That is requirement 4 satisfied
-structurally rather than by a confidence score.
+The verdict is `DEAL` or `REJECT_<gate>`. Uncertainty is shown as caveats rather
+than as a band: `FMV_UNVERIFIED`, `VARIANT_UNRESOLVED` (a banded entry valued at
+its midpoint), `AMBIGUOUS_MATCH`, `POSTAGE_UNKNOWN`, and an assumed condition.
 
 ### The maximum allowable bid
 
@@ -90,9 +94,9 @@ fee that is a function of the purchase price. The cost of bidding therefore
 depends on the bid, so the maximum is **solved for**, never divided out.
 
 ```
-effective FMV   = reference × condition × scope × bracelet     (floors)
+effective FMV   = FMV point × condition                        (floors)
 net proceeds    = effective FMV − platform fees − order fee
-                                − outbound postage − service buffer
+                                − outbound postage
 required profit = max(percentage of effective FMV, absolute floor)
 budget          = net proceeds − required profit
 solve for B:      B + inbound postage + buyer_protection(B) ≤ budget
@@ -102,8 +106,9 @@ Solved by integer bisection to the penny. `fees.py` owns all of it.
 
 Business sellers are a separate branch: their price is VAT-inclusive and no
 buyer protection applies. While the operator is unregistered that reduces to
-"no buyer protection fee" and nothing else — **if he registers, this branch
-changes materially** and must be rebuilt rather than adjusted.
+"no buyer protection fee" and nothing else — **if the operator registers, this
+branch changes materially** and must be rebuilt rather than adjusted. There is
+no registration flag in code; registering means rebuilding the arithmetic.
 
 ### Rounding
 
@@ -115,25 +120,29 @@ bid, so a rounding error can cost an opportunity and cannot cost money.
 
 ## 3. Gates
 
-Every gate is evaluated for every listing and all results are stored. The
-verdict names the first failure in cost order; the rest are on the item page.
-That is deliberate — a rejection carrying one reason tells you nothing about the
-other seven, and requirement 3 exists so rejections can be debugged.
+Every gate is evaluated for every listing and all results are stored. Gates
+are evaluated in the order below and the verdict names the first failure; the
+rest are on the item page. That is deliberate — a rejection carrying one reason
+tells you nothing about the others, and requirement 3 exists so rejections can
+be debugged.
 
 | Gate | Fails when |
 |---|---|
 | `CATALOGUE` | No reference matched the title. There is no FMV, so nothing else can be said about price. |
-| `BLACKLIST` | A negation-aware phrase rule fired. |
-| `DOMESTIC` | Not located in GB. |
-| `CONDITION` | For parts or not working. |
+| `BLACKLIST` | A negation-aware phrase rule fired on the title or the condition string. "For parts or not working" is caught here. |
 | `SELLER` | Feedback percentage or rating count below the floor. Missing seller data is a caveat, never a rejection. |
-| `CURRENCY` | Priced in something other than GBP. |
 | `VIABLE` | No bid at any price clears the profit floor. |
-| `PRICE` | Above the maximum bid even on the optimistic reading. |
+| `PRICE` | Above the maximum bid, or no usable price — including a listing that states no currency. |
+
+UK location and GBP pricing are enforced by the search query's filters, not by
+gates.
 
 For auctions the price compared is the **next valid bid**, not the current one —
 a listing can sit under the maximum and still be unreachable at the next
 increment step.
+
+A `DEAL` alerts once. It alerts again only if its price later drops below the
+price quoted in the last delivered alert.
 
 ---
 
@@ -145,8 +154,8 @@ dashboard and in every notification.
 
 Matching: `excludes` disqualifies, `requires_any` gates, `aliases` or the
 reference key admits. `priority` separates a specific variant from a catch-all.
-An ambiguous match widens the band across every tied entry rather than picking
-one, because ambiguity is a data gap and should look like one.
+An exact tie values the first entry and is flagged `AMBIGUOUS_MATCH`, naming
+the others.
 
 Two rules learned expensively:
 
@@ -157,7 +166,8 @@ Two rules learned expensively:
   in meaning, so no heuristic on the string can work.
 
 Where a title genuinely cannot settle a variant, the entry carries `fmv_low` and
-`fmv_high` instead of pretending to a point.
+`fmv_high`. It is valued at their midpoint and flagged `VARIANT_UNRESOLVED`;
+its `fmv` line is then ignored, so edit the band.
 
 ---
 
@@ -166,7 +176,8 @@ Where a title genuinely cannot settle a variant, the entry carries `fmv_low` and
 Negation-aware, because naive substring matching fails in both directions:
 "water resistance untested" is boilerplate on most vintage listings, and "not a
 replica" contains *replica*. A rule fires only where its pattern matches and no
-negation matches within a window either side.
+negation matches within a window either side. Rules run on the title and,
+separately, on eBay's condition string.
 
 `tests/corpus.toml` is a build gate. Grow it from listings you have actually
 labelled in the dashboard — a hand-authored corpus measures the author's
@@ -178,7 +189,9 @@ imagination, a labelled one measures the system.
 
 Browse API, `item_summary/search`, application (client-credentials) token,
 `X-EBAY-C-MARKETPLACE-ID: EBAY_GB`. One compound OR query across all brands per
-sweep; a single page reaches far enough back to catch everything new.
+sweep. For Buy It Now a single page reaches far enough back to catch everything
+new. The auction sweep pages on until a page ends beyond `AUCTION_HORIZON`, so
+every auction ending inside it is seen.
 
 Filters: price band, GBP, buying option, `itemLocationCountry:GB`, and the leaf
 watch category. Sorted by newly listed for Buy It Now and ending soonest for
@@ -190,8 +203,21 @@ discard listings if you get them wrong:
 - `price` is **absent on most auctions**, which carry only `currentBidPrice`.
 - `shippingOptions` may be missing entirely. That is unknown postage, not free
   postage.
+- A price with no `currency` is not assumed GBP. The listing rejects on `PRICE`.
 - eBay UK qualifies the generic pre-owned condition in the `condition` *string*
   while `conditionId` stays generic. The grade is in the string.
+
+### Closing prices
+
+After each auction sweep, every stored auction whose end time is more than
+`CLOSING_CHECK_DELAY` past is fetched once with Browse `getItem`, which keeps
+returning ended auctions with their final `currentBidPrice`, `bidCount` and
+`estimatedAvailabilities`. The `closings` table stores the final price, the bid
+count, whether it had bids, and `sold` (`estimatedSoldQuantity` above zero). An
+auction with bids that missed its reserve has bids and is not sold. An absent
+sold field is stored as unknown, never as unsold. A 404 is stored without a
+price so it is not retried; any other failure retries next sweep. Buy It Now
+disappearances are not tracked.
 
 **Limited Release APIs are not used and must not be.** The Offer API needs a
 user token, which is the one thing this system must not hold. The Order API is
@@ -212,10 +238,37 @@ Requirement 8 is enforced three ways, deliberately of different kinds:
 The first two protect against the environment. Only the third protects against a
 future edit, and that is the one that matters in six months.
 
-The dashboard has no authentication and is not meant to. It binds to loopback
-and is reached over a tunnel or a private network. Do not give it a public
-hostname; that is the choice that forced the previous attempt into five layers
-of edge security defending a problem it had created.
+The dashboard itself has no authentication. It binds to loopback — the systemd
+unit sets `BIND_HOST` in the environment, which overrides `.env` — and is
+reached only through a token-based Cloudflare Tunnel, with `cloudflared`
+installed as its own service. Cloudflare Access in front of the tunnel's
+hostname is the only authentication, so the Access application must exist and
+cover the whole hostname before the hostname is routed. No inbound port is
+opened. The steps and their order are in `docs/DEPLOY.md`.
+
+---
+
+## 7a. Dashboard
+
+Two default views, both sorted by how far the price the gate used sits below
+the catalogue FMV (`below_fmv_bp`, computed in valuation and stored, so the web
+layer still does no arithmetic):
+
+- **Buy It Now** — `/`.
+- **Auctions ending within `AUCTION_ENDING_SOON`** — `/?view=auctions`.
+
+Both hide unmatched listings and `REJECT_BLACKLIST` by default. Choosing a
+verdict filters within the view; "everything" shows every listing in either
+format.
+
+The Catalogue page's **Observed** column is the median closing price of sold
+auctions per entry, with the count behind it, blank below
+`OBSERVED_MIN_AUCTIONS`; **Unsold** counts auctions that ended without a sale.
+Blacklist-rejected listings are excluded from both.
+
+The dashboard is an installable PWA: `/manifest.json` (linked with
+`crossorigin="use-credentials"` so the fetch carries the Access cookie), icons
+drawn in code, and a service worker that registers and caches nothing.
 
 ---
 

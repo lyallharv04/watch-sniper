@@ -197,16 +197,15 @@ def cmd_constants() -> int:
         ("INBOUND_POSTAGE_ESTIMATE", fmt(C.INBOUND_POSTAGE_ESTIMATE)),
         ("OUTBOUND_POSTAGE", fmt(C.OUTBOUND_POSTAGE)),
         ("COND_MULT", str(C.COND_MULT)),
-        ("SCOPE_MULT", str(C.SCOPE_MULT)),
-        ("BRACELET_MULT", str(C.BRACELET_MULT)),
-        ("PESSIMISTIC_UNKNOWN", str(C.PESSIMISTIC_UNKNOWN)),
-        ("OPTIMISTIC_UNKNOWN", str(C.OPTIMISTIC_UNKNOWN)),
         ("SEARCH_MIN_PRICE", fmt(C.SEARCH_MIN_PRICE)),
         ("SEARCH_MAX_PRICE", fmt(C.SEARCH_MAX_PRICE)),
+        ("AUCTION_HORIZON", str(C.AUCTION_HORIZON)),
+        ("CLOSING_CHECK_DELAY", str(C.CLOSING_CHECK_DELAY)),
+        ("OBSERVED_MIN_AUCTIONS", str(C.OBSERVED_MIN_AUCTIONS)),
+        ("AUCTION_ENDING_SOON", str(C.AUCTION_ENDING_SOON)),
         ("EBAY_CATEGORY_IDS", str(C.EBAY_CATEGORY_IDS)),
         ("MIN_SELLER_FEEDBACK_PCT_X100", f"{C.MIN_SELLER_FEEDBACK_PCT_X100 / 100:.2f}%"),
         ("MIN_SELLER_FEEDBACK_SCORE", str(C.MIN_SELLER_FEEDBACK_SCORE)),
-        ("VAT_REGISTERED", str(C.VAT_REGISTERED)),
     ]
     width = max(len(n) for n, _ in rows)
     for name, value in rows:
@@ -231,7 +230,7 @@ def cmd_catalogue() -> int:
     for r in refs:
         band = f"{fmt(r.fmv_low)}-{fmt(r.fmv_high)}" if r.is_band else ""
         print(f"{'ok' if r.verified else '--':<4}{usage.get(r.key, 0):>9}  "
-              f"{fmt(r.fmv):>9}  {band:>19}  {r.display}  [{r.key}]")
+              f"{fmt(r.point):>9}  {band:>19}  {r.display}  [{r.key}]")
     print("\nWork down from the top: unverified first, then by how many real "
           "listings each has priced.")
     return 0
