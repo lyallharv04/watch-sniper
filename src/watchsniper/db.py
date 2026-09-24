@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS verdicts (
     price_pence         INTEGER,
     price_basis         TEXT NOT NULL,
     headroom_pence      INTEGER,
+    below_fmv_bp        INTEGER,
     derivation_json     TEXT NOT NULL,
     config_fingerprint  TEXT NOT NULL
 );
@@ -153,15 +154,15 @@ class Database:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        #: True when a verdicts table from the two-scenario model was dropped.
-        #: Verdicts are derived data; the engine rebuilds them by re-scoring.
+        #: True when a verdicts table in an older shape was dropped. Verdicts
+        #: are derived data; the engine rebuilds them by re-scoring.
         self.verdicts_dropped = False
         with self._lock:
             cols = {
                 r["name"]
                 for r in self._conn.execute("PRAGMA table_info(verdicts)")
             }
-            if "mab_pess_pence" in cols:
+            if cols and "below_fmv_bp" not in cols:
                 self._conn.execute("DROP TABLE verdicts")
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
@@ -250,8 +251,9 @@ class Database:
                 item_id, computed_at_utc, verdict, primary_reason, gates_json,
                 caveats_json, scope, bracelet, catalogue_key, catalogue_display,
                 fmv_verified, fmv_pence, eff_fmv_pence, mab_pence, price_pence,
-                price_basis, headroom_pence, derivation_json, config_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                price_basis, headroom_pence, below_fmv_bp, derivation_json,
+                config_fingerprint
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(item_id) DO UPDATE SET
                 computed_at_utc=excluded.computed_at_utc,
                 verdict=excluded.verdict,
@@ -269,6 +271,7 @@ class Database:
                 price_pence=excluded.price_pence,
                 price_basis=excluded.price_basis,
                 headroom_pence=excluded.headroom_pence,
+                below_fmv_bp=excluded.below_fmv_bp,
                 derivation_json=excluded.derivation_json,
                 config_fingerprint=excluded.config_fingerprint
             """,
@@ -290,6 +293,7 @@ class Database:
                 a.effective_price,
                 a.price_basis,
                 a.headroom,
+                a.below_fmv_bp,
                 json.dumps(_valuation_json(v)),
                 a.config_fingerprint,
             ),
@@ -304,8 +308,16 @@ class Database:
         limit: int = 100,
         offset: int = 0,
     ) -> list[sqlite3.Row]:
+        """Listings with their verdicts, furthest below FMV first.
+
+        `verdict` "" (the default) means every catalogue-matched listing,
+        "all" means everything including unmatched, anything else is an exact
+        verdict. Unpriced and unmatched rows sort last, newest first.
+        """
         where, params = ["1=1"], []
-        if verdict:
+        if verdict == "":
+            where.append("v.catalogue_key <> ''")
+        elif verdict != "all":
             where.append("v.verdict = ?")
             params.append(verdict)
         if brand:
@@ -320,12 +332,14 @@ class Database:
             SELECT l.*, v.verdict, v.primary_reason, v.catalogue_display,
                    v.catalogue_key, v.fmv_verified, v.fmv_pence, v.mab_pence,
                    v.price_pence AS eff_price_pence, v.price_basis,
-                   v.headroom_pence, v.caveats_json, v.scope, v.bracelet,
+                   v.headroom_pence, v.below_fmv_bp, v.caveats_json, v.scope,
+                   v.bracelet,
                    (SELECT group_concat(label) FROM labels
                      WHERE labels.item_id = l.item_id) AS labels
               FROM listings l JOIN verdicts v ON v.item_id = l.item_id
              WHERE {' AND '.join(where)}
-             ORDER BY l.first_seen_utc DESC
+             ORDER BY v.below_fmv_bp IS NULL, v.below_fmv_bp DESC,
+                      l.first_seen_utc DESC
              LIMIT ? OFFSET ?
             """,
             params,
@@ -349,6 +363,34 @@ class Database:
             "WHERE catalogue_key <> '' GROUP BY catalogue_key"
         )
         return {r["catalogue_key"]: r["n"] for r in rows}
+
+    def observed_closings(self) -> dict[str, tuple[int, int]]:
+        """Median closing price and auction count per catalogue entry.
+
+        Counts only auctions that closed with bids and a GBP price. Listings
+        the blacklist rejects are left out: a bracelet sold alone or a custom
+        dial matches the reference's name but is not the reference. The
+        median of an even count is the lower-rounded mean of the middle two.
+        """
+        prices: dict[str, list[int]] = {}
+        for r in self.query(
+            "SELECT v.catalogue_key, c.final_price_pence FROM closings c"
+            " JOIN verdicts v ON v.item_id = c.item_id"
+            " WHERE c.had_bids = 1 AND c.final_price_pence IS NOT NULL"
+            " AND v.catalogue_key <> '' AND v.verdict <> 'REJECT_BLACKLIST'"
+        ):
+            prices.setdefault(r["catalogue_key"], []).append(r["final_price_pence"])
+        out = {}
+        for key, values in prices.items():
+            values.sort()
+            mid = len(values) // 2
+            median = (
+                values[mid]
+                if len(values) % 2
+                else (values[mid - 1] + values[mid]) // 2
+            )
+            out[key] = (median, len(values))
+        return out
 
     def unmatched_titles(self) -> list[str]:
         return [

@@ -169,6 +169,15 @@ class Assessment:
         return self.valuation.mab - self.effective_price
 
     @property
+    def below_fmv_bp(self) -> int | None:
+        """How far the effective price sits below the catalogue FMV, in basis
+        points of FMV. Negative when priced above it. Display and sorting only;
+        no gate reads it."""
+        if not self.fmv or self.effective_price is None:
+            return None
+        return (self.fmv - self.effective_price) * 10_000 // self.fmv
+
+    @property
     def is_actionable(self) -> bool:
         return self.verdict == "DEAL"
 

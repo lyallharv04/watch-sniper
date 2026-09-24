@@ -783,6 +783,71 @@ class TestClosings(unittest.TestCase):
         self.assertEqual(len(client.fetched), before)
 
 
+class TestDashboard(unittest.TestCase):
+    def setUp(self):
+        from .db import Database
+        from .poller import Engine
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Database(Path(self.tmp.name) / "t.db")
+        self.engine = Engine(self.db, None)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def add(self, item_id: str, **kw):
+        item = listing(item_id=item_id, **kw)
+        self.db.upsert_listing(item)
+        self.engine.score(item)
+
+    def test_below_fmv_is_stored_in_basis_points_of_fmv(self):
+        a = self.engine.valuer.assess(listing(price=parse_gbp("100.00")))
+        self.assertEqual(
+            a.below_fmv_bp, (a.fmv - parse_gbp("100.00")) * 10_000 // a.fmv
+        )
+        self.assertIsNone(self.engine.valuer.assess(listing(title="Rolex")).below_fmv_bp)
+
+    def test_default_feed_is_matched_listings_furthest_below_fmv_first(self):
+        self.add("cheap", price=parse_gbp("100.00"))
+        self.add("dear", price=parse_gbp("300.00"))
+        self.add("mid", price=parse_gbp("200.00"))
+        self.add("unmatched", title="Rolex Submariner 116610LN")
+        self.assertEqual(
+            [r["item_id"] for r in self.db.feed()], ["cheap", "mid", "dear"]
+        )
+        self.assertEqual(len(self.db.feed(verdict="all")), 4)
+
+    def test_observed_median_counts_only_auctions_with_bids(self):
+        prices = {"a": "300.00", "b": "340.00", "c": "320.00", "d": "360.00"}
+        for item_id, value in prices.items():
+            self.add(item_id, is_auction=True)
+            self.db.save_closing(item_id, parse_gbp(value), 5)
+        self.add("nobids", is_auction=True)
+        self.db.save_closing("nobids", parse_gbp("100.00"), 0)
+        self.add(
+            "strap", is_auction=True,
+            title="Tissot PRX Powermatic 80 bracelet for 40mm",
+        )
+        self.db.save_closing("strap", parse_gbp("50.00"), 3)
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        # even count: lower-rounded mean of 320 and 340
+        self.assertEqual(self.db.observed_closings()[key], (parse_gbp("330.00"), 4))
+
+    def test_catalogue_page_hides_observed_under_the_minimum(self):
+        from . import web
+
+        key = self.engine.valuer.assess(listing()).catalogue_key
+        for i in range(C.OBSERVED_MIN_AUCTIONS - 1):
+            self.add(f"x{i}", is_auction=True)
+            self.db.save_closing(f"x{i}", parse_gbp("123.45"), 2)
+        self.assertEqual(self.db.observed_closings()[key][1], C.OBSERVED_MIN_AUCTIONS - 1)
+        self.assertNotIn("£123.45", web.render_catalogue(self.engine))
+        self.add("last", is_auction=True)
+        self.db.save_closing("last", parse_gbp("123.45"), 2)
+        self.assertIn("£123.45", web.render_catalogue(self.engine))
+
+
 class TestAuctionPaging(unittest.TestCase):
     def sweep(self, hours: list[float]) -> tuple[_FakeClient, int]:
         from datetime import timedelta

@@ -135,6 +135,11 @@ def verdict_chip(verdict: str) -> str:
     return f'<span class="chip {cls}">{e(label)}</span>'
 
 
+def pct(bp: int | None) -> str:
+    """A stored basis-point figure as a percentage string. Formatting only."""
+    return "—" if bp is None else f"{bp / 100:.1f}%"
+
+
 def listing_tags(scope: str | None, bracelet: str | None) -> str:
     """Scope and bracelet as read from the title. Labels only; not valued."""
     return "".join(
@@ -175,6 +180,7 @@ def feed_table(rows: list[sqlite3.Row]) -> str:
         )
     out = [
         "<table><thead><tr><th>Verdict</th><th>Listing</th><th>Reference</th>"
+        '<th class="num">Below FMV</th><th class="num">FMV</th>'
         '<th class="num">Price</th><th class="num">Max bid</th>'
         '<th class="num">Headroom</th><th>Label</th></tr></thead><tbody>'
     ]
@@ -191,6 +197,8 @@ def feed_table(rows: list[sqlite3.Row]) -> str:
             f"{e(r['primary_reason'][:110])}</span></td>"
             f"<td>{e(r['catalogue_display'] or '—')}<br>"
             f"{caveat_tags(caveats, only_important=True)}</td>"
+            f"<td class='num'>{pct(r['below_fmv_bp'])}</td>"
+            f"<td class='num'>{fmt(r['fmv_pence'])}</td>"
             f"<td class='num'>{fmt(r['eff_price_pence'])}<br>"
             f"<span class='dim'>{e(r['price_basis'])}</span></td>"
             f"<td class='num'>{fmt(r['mab_pence'])}</td>"
@@ -240,12 +248,13 @@ def render_feed(engine: Engine, params: dict) -> str:
     rows = engine.db.feed(verdict=verdict, brand=brand, query=q, limit=250)
     counts = engine.db.verdict_counts()
 
-    options = ["", "DEAL"] + [
+    options = ["", "all", "DEAL"] + [
         r["verdict"] for r in counts if r["verdict"].startswith("REJECT_")
     ]
+    names = {"": "catalogue-matched", "all": "everything"}
     opts = "".join(
         f"<option value='{e(o)}'{' selected' if o == verdict else ''}>"
-        f"{e(o or 'everything')}</option>"
+        f"{e(names.get(o, o))}</option>"
         for o in dict.fromkeys(options)
     )
     brands = sorted({r["catalogue_display"].split(" ")[0] for r in rows if r["catalogue_display"]})
@@ -264,9 +273,10 @@ def render_feed(engine: Engine, params: dict) -> str:
   <span class="dim">last 14 days: {tally}</span>
 </form>
 {feed_table(rows)}
-<p class="dim">Rejections are shown because they are how the blacklist and the
-FMV table get debugged. Scope and bracelet tags are read from the title and do
-not move the maximum bid.</p>"""
+<p class="dim">Sorted by how far the price the gate used sits below the catalogue
+FMV. Rejections are shown because they are how the blacklist and the FMV table
+get debugged. Scope and bracelet tags are read from the title and do not move
+the maximum bid.</p>"""
 
 
 def render_item(engine: Engine, item_id: str) -> str:
@@ -372,6 +382,14 @@ cannot trust — and unpriced is a more honest output than confidently wrong.</p
 
 def render_catalogue(engine: Engine) -> str:
     usage = engine.db.catalogue_usage()
+    observed = engine.db.observed_closings()
+
+    def seen(key: str) -> str:
+        median, n = observed.get(key, (0, 0))
+        if n < C.OBSERVED_MIN_AUCTIONS:
+            return ""
+        return f"{fmt(median)} <span class='dim'>({n})</span>"
+
     refs = sorted(
         engine.catalogue.references,
         key=lambda r: (r.verified, -usage.get(r.key, 0), r.brand),
@@ -381,6 +399,7 @@ def render_catalogue(engine: Engine) -> str:
         f"<td>{e(r.display)}</td><td><code>{e(r.key)}</code></td>"
         f"<td class='num'>{fmt(r.point)}</td>"
         f"<td class='num'>{f'{fmt(r.fmv_low)} – {fmt(r.fmv_high)}' if r.is_band else ''}</td>"
+        f"<td class='num'>{seen(r.key)}</td>"
         f"<td class='num'>{usage.get(r.key, 0)}</td>"
         f"<td class='dim'>{e(r.notes[:120])}</td></tr>"
         for r in refs
@@ -398,7 +417,9 @@ what it would have done to real traffic.</p>
 <form class="inline" method="post" action="/rescore"><button>re-score everything</button></form>
 </div>
 <table><thead><tr><th>Ver.</th><th>Reference</th><th>Key</th>
-<th class="num">FMV</th><th class="num">Band</th><th class="num">Listings priced</th>
+<th class="num">FMV</th><th class="num">Band</th>
+<th class="num" title="Median closing price of auctions that closed with bids (count in brackets); blank under the minimum count">Observed</th>
+<th class="num">Listings priced</th>
 <th>Notes</th></tr></thead><tbody>{rows}</tbody></table>"""
 
 
@@ -480,6 +501,7 @@ def render_constants(engine: Engine) -> str:
         ("SEARCH_MAX_PRICE", fmt(C.SEARCH_MAX_PRICE)),
         ("AUCTION_HORIZON", str(C.AUCTION_HORIZON)),
         ("CLOSING_CHECK_DELAY", str(C.CLOSING_CHECK_DELAY)),
+        ("OBSERVED_MIN_AUCTIONS", C.OBSERVED_MIN_AUCTIONS),
         ("EBAY_CATEGORY_IDS", C.EBAY_CATEGORY_IDS),
     ]
     body = "".join(row(n, v) for n, v in items)

@@ -201,6 +201,9 @@ AUCTION_HORIZON = timedelta(days=3)
 # keeps returning ended auctions with the final bid, so this only needs to be
 # long enough for eBay to settle the result.
 CLOSING_CHECK_DELAY = timedelta(minutes=5)
+# The catalogue page shows an observed median closing price only when at least
+# this many auctions sit behind it.
+OBSERVED_MIN_AUCTIONS = 3
 
 
 def search_query() -> str:
