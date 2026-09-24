@@ -641,6 +641,21 @@ class TestAlerting(unittest.TestCase):
         self.db.log_notification("alert", True, "", a.listing.item_id, None)
         self.assertFalse(self.engine._should_notify(self.deal("10.00"), is_new=False))
 
+    def test_alert_links_use_the_public_base_url(self):
+        from unittest import mock
+
+        from . import notify
+
+        a = self.deal("60.00", item_id="v1|123|0")
+        with mock.patch.object(C, "PUBLIC_BASE_URL", "https://watches.example.com"):
+            url = self.engine._item_url(a.listing.item_id)
+        self.assertEqual(url, "https://watches.example.com/item/v1%7C123%7C0")
+        self.assertIn(url, notify.alert_for(a, url).body)
+
+    def test_public_base_url_falls_back_to_localhost(self):
+        if "PUBLIC_BASE_URL" not in os.environ:
+            self.assertEqual(C.PUBLIC_BASE_URL, f"http://localhost:{C.BIND_PORT}")
+
     def test_old_notifications_table_gains_the_price_column(self):
         import sqlite3
 

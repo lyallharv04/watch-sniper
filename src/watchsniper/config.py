@@ -158,6 +158,19 @@ BIND_HOST = env(
     "Defaults to loopback only.",
 )
 BIND_PORT = env_int("BIND_PORT", 8137, "Any free port.", "Defaults to 8137.")
+PUBLIC_BASE_URL = (
+    env(
+        "PUBLIC_BASE_URL",
+        None,
+        "The address you open the dashboard at from your phone: the Cloudflare "
+        "Tunnel public hostname protected by Access, e.g. "
+        "https://watches.example.com. Used for the dashboard links in ntfy "
+        "alerts. No trailing slash needed.",
+        "Links fall back to http://localhost:<BIND_PORT>, which only works on "
+        "the server itself.",
+    )
+    or f"http://localhost:{BIND_PORT}"
+).rstrip("/")
 
 POLL_BIN_SECONDS = env_int(
     "POLL_BIN_SECONDS",

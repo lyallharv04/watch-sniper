@@ -12,6 +12,7 @@ from __future__ import annotations
 import threading
 import time
 import traceback
+import urllib.parse
 from dataclasses import dataclass
 from datetime import timezone
 
@@ -242,8 +243,8 @@ class Engine:
         )
 
     def _item_url(self, item_id: str) -> str:
-        host = "localhost" if C.BIND_HOST in ("0.0.0.0", "127.0.0.1") else C.BIND_HOST
-        return f"http://{host}:{C.BIND_PORT}/item/{item_id}"
+        # eBay item ids contain pipes; the dashboard decodes the path segment.
+        return f"{C.PUBLIC_BASE_URL}/item/{urllib.parse.quote(item_id, safe='')}"
 
     # -- loops -------------------------------------------------------------
 
