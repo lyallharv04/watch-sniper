@@ -103,6 +103,8 @@ and click-through intact.
 
 ### A5. Bind to loopback. No authentication, because no exposure
 
+*Superseded by **A18** on 2026-09-24. Kept for its reasoning.*
+
 The dashboard listens on `127.0.0.1` and is reached over an SSH tunnel or a
 private network overlay such as Tailscale or WireGuard. There is no login page,
 no session, no edge authentication and no public hostname.
@@ -288,6 +290,28 @@ traffic. Adding a reference is then a decision the operator makes when he can
 put a real number on it. Unpriced is a more honest output than confidently
 wrong, and a ranked list of what to price next is worth more than twenty guesses.
 
+### A18. The dashboard is reached through Cloudflare Tunnel and Access — 2026-09-24
+
+Phone access is now required. Cloudflare Tunnel plus Access puts
+authentication at Cloudflare's edge with no open ports on the host, which keeps
+the original intent (no unauthenticated exposure) while allowing remote access.
+
+Concretely: the service still binds to loopback and still has no login of its
+own — the systemd unit sets `BIND_HOST` in the environment so `.env` cannot
+widen it. `cloudflared` runs as its own service with a tunnel token and
+connects outbound, so no inbound port is opened. A Cloudflare Access
+application covering the whole hostname is the only authentication, and it is
+created before the hostname is routed. Authentication is still not hand-rolled.
+
+What this does not bring back from D30 and D31 is the defended public origin:
+there is no origin reachable from the internet, so no origin IP allowlist, no
+shared-secret header and no origin certificate to renew. The cost is that
+Access is now a single control — a misconfigured Access application is an
+exposed dashboard — and that `/api/health` sits behind it like every other
+path. `PUBLIC_BASE_URL` makes alert links point at the tunnel hostname.
+
+*Supersedes **A5**, **D20**, **D30** and **D31**.*
+
 ---
 
 ## 2. Inherited decisions, and what happened to them
@@ -316,7 +340,7 @@ rebuild's.
 | D17 | Stage 1 biases toward recall, because a human adjudicates every alert. | **Kept.** Rejections are shown beside deals with every gate result, so a marginal case is visible rather than dropped. |
 | D18 | Blacklist matching is negation-aware with a labelled corpus, because naive matching fails both ways. | **Kept**, rules ported intact. The corpus is now a build gate and has grown from live traffic. |
 | D19 | Web Push primary, email backstop, no Telegram, no iOS. | **Superseded by A4.** The constraint that produced it — no Telegram, no iOS — is unchanged and is what ntfy satisfies. |
-| D20 | Dashboard behind Cloudflare Tunnel and Access, because that surface reaches money and auth should never be hand-rolled. | **Superseded by A5.** "Never hand-roll auth" is right. Not having a public surface is better than either. |
+| D20 | Dashboard behind Cloudflare Tunnel and Access, because that surface reaches money and auth should never be hand-rolled. | **Superseded by A5, then by A18.** "Never hand-roll auth" is right, and A18 keeps it: Tunnel and Access, now for phone access. |
 | D21 | The dashboard never recomputes FMV, MAB or margin in TypeScript. | **Kept and made structural — A3.** |
 | D22 | Host is a plain VPS, not a scale-to-zero platform, because this is a stateful poller that must never sleep. | **Kept.** |
 | D23 | The Offer API application was filed to start the clock, but nothing depends on it. | **Kept.** |
@@ -326,8 +350,8 @@ rebuild's.
 | D27 | Widen the catalogue rather than narrowing the brand list, because dropping brands shrinks the funnel. | **Kept as direction, qualified by A17.** Widen it with real numbers, not with more estimates. |
 | D28 | `SOLD_BAND_EXPECTED_RATIO` is retained but is not a gate. | **Deferred with D9.** |
 | D29 | The live rejection gates recorded in cost order, so "are we over-gating?" is answerable from measurement. | **Kept and improved.** Every gate is now evaluated and stored for every listing, not just the first one to fail, so the question is answerable per gate rather than per listing. |
-| D30 | Deployment Option B: dashboard on Cloudflare behind Access, FastAPI on the VPS reachable over the internet. | **Superseded by A5.** |
-| D31 | The public origin is defended in three layers, none sufficient alone. | **Superseded by A5.** Every layer was defending the exposure created by D30. |
+| D30 | Deployment Option B: dashboard on Cloudflare behind Access, FastAPI on the VPS reachable over the internet. | **Superseded by A5, then by A18.** Access returns; the origin reachable over the internet does not. |
+| D31 | The public origin is defended in three layers, none sufficient alone. | **Superseded by A5, then by A18.** There is still no public origin to defend — the tunnel is outbound only. |
 | D32 | An upstream 5xx from the comps vendor retries once, on its own budget, because a 502 means eBay blocked the vendor and retrying does not unblock them. | **Deferred with D9.** |
 
 ---
