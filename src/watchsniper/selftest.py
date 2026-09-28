@@ -895,10 +895,66 @@ class TestDashboard(unittest.TestCase):
 
         self.add("bin")
         self.assertIn("Buy It Now", web.render_feed(self.engine, {}))
-        self.assertIn(
-            "Auctions ending within",
-            web.render_feed(self.engine, {"view": ["auctions"]}),
-        )
+        auctions = web.render_feed(self.engine, {"view": ["auctions"]})
+        self.assertIn("auctions ending within", auctions)
+        self.assertIn("Prices are the next valid bid now", auctions)
+
+    def test_feed_card_shows_the_scan_strip(self):
+        from . import web
+
+        self.add("cheap", price=parse_gbp("100.00"))
+        a = self.engine.valuer.assess(listing(item_id="cheap", price=parse_gbp("100.00")))
+        html = web.render_feed(self.engine, {})
+        self.assertIn(f"<b>{web.pct(a.below_fmv_bp)}</b>", html)
+        self.assertIn(f"below {fmt(a.fmv)} FMV", html)
+        self.assertIn(f'<b class="pos">{fmt(a.headroom)}</b>', html)
+        self.assertIn('class="cav warn">FMV UNVERIFIED', html)
+        self.assertIn('name="label" value="fmv_wrong"', html)
+
+    def test_item_page_summary_and_ledger(self):
+        from . import web
+
+        self.add("cheap", price=parse_gbp("100.00"))
+        a = self.engine.valuer.assess(listing(item_id="cheap", price=parse_gbp("100.00")))
+        html = web.render_item(self.engine, "cheap")
+        self.assertIn("Open on eBay", html)
+        self.assertIn(f'<div class="lr final"><span>Maximum allowable bid</span>'
+                      f'<span class="v">{fmt(a.valuation.mab)}</span>', html)
+        self.assertIn("pass</span><span class=\"gname\">PRICE", html)
+        self.assertIn("No such listing", web.render_item(self.engine, "missing"))
+
+    def test_health_titles_alerts_from_the_verdict(self):
+        from . import web
+
+        self.add("cheap", price=parse_gbp("100.00"))
+        self.db.log_notification("alert", True, "HTTP 200", "cheap", parse_gbp("100.00"))
+        self.db.log_notification("stalled", False, "HTTP 500")
+        html = web.render_health(self.engine)
+        ref = self.engine.valuer.assess(listing()).catalogue_display
+        self.assertIn(f"{ref} at £100.00", html)
+        self.assertIn("Ingestion stopped", html)
+        self.assertIn('class="sent failed">FAILED', html)
+
+    def test_labelling_returns_to_the_page_it_came_from(self):
+        from . import web
+
+        self.add("cheap", price=parse_gbp("100.00"))
+        feed = web.render_feed(self.engine, {"brand": ["Tissot"]})
+        self.assertIn('name="next" value="/?brand=Tissot"', feed)
+        item = web.render_item(self.engine, "cheap")
+        self.assertIn('name="next" value="/item/cheap"', item)
+        for ok in ("/", "/?view=auctions", "/item/v1%7C1%7C0"):
+            self.assertEqual(web.safe_next(ok), ok)
+        for bad in ("https://evil.example", "//evil.example", "/\\evil", "javascript:x"):
+            self.assertEqual(web.safe_next(bad), "/")
+
+    def test_catalogue_has_phone_cards_and_desktop_table(self):
+        from . import web
+
+        html = web.render_catalogue(self.engine)
+        self.assertIn('class="list tight catcards"', html)
+        self.assertIn('class="cattable"', html)
+        self.assertIn(f"fewer than {C.OBSERVED_MIN_AUCTIONS} sold", html)
 
     def test_observed_median_counts_only_sold_auctions(self):
         prices = {"a": "300.00", "b": "340.00", "c": "320.00", "d": "360.00"}

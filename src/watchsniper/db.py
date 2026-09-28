@@ -437,7 +437,8 @@ class Database:
             " v.caveats_json, v.scope, v.bracelet, v.catalogue_key,"
             " v.catalogue_display, v.fmv_verified, v.fmv_pence, v.mab_pence,"
             " v.price_pence AS eff_price_pence, v.price_basis, v.headroom_pence,"
-            " v.derivation_json, v.config_fingerprint, v.computed_at_utc"
+            " v.below_fmv_bp, v.derivation_json, v.config_fingerprint,"
+            " v.computed_at_utc"
             " FROM listings l"
             " LEFT JOIN verdicts v ON v.item_id = l.item_id WHERE l.item_id = ?",
             (item_id,),
@@ -542,8 +543,12 @@ class Database:
         )
 
     def recent_notifications(self, limit: int = 25) -> list[sqlite3.Row]:
+        """Recent notifications, with the matched reference for alert titles."""
         return self.query(
-            "SELECT * FROM notifications ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT n.*, v.catalogue_display FROM notifications n"
+            " LEFT JOIN verdicts v ON v.item_id = n.item_id"
+            " ORDER BY n.id DESC LIMIT ?",
+            (limit,),
         )
 
     def auctions_awaiting_close(self, ended_before: datetime) -> list[str]:

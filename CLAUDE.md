@@ -253,16 +253,36 @@ the Access login appears before the dashboard.
 
 ## 7a. Dashboard
 
-Two default views, both sorted by how far the price the gate used sits below
-the catalogue FMV (`below_fmv_bp`, computed in valuation and stored, so the web
-layer still does no arithmetic):
+Phone first, built to the Claude Design handoff (`docs/DASHBOARD_BRIEF.md` was
+its brief). On a phone, navigation is a **bottom bar** within thumb reach —
+Feed, Catalogue, Not priced, Outcomes, Health, Constants — clear of the home
+indicator via safe-area insets. On a wide screen the same links become a top
+bar and pages sit in a centred column. Warm palette; the dark theme follows the
+system setting. Stored text (gate details, reasons) is shown as stored, never
+reworded in the page.
+
+The Feed has a three-way switch, all sorted by how far the price the gate used
+sits below the catalogue FMV (`below_fmv_bp`, computed in valuation and stored,
+so the web layer still does no arithmetic):
 
 - **Buy It Now** — `/`.
-- **Auctions ending within `AUCTION_ENDING_SOON`** — `/?view=auctions`.
+- **Auctions** — `/?view=auctions`, those ending within `AUCTION_ENDING_SOON`,
+  under a standing caution that the price is only the next valid bid.
+- **All** — `/?verdict=all`, every listing in either format.
 
-Both hide unmatched listings and `REJECT_BLACKLIST` by default. Choosing a
-verdict filters within the view; "everything" shows every listing in either
-format.
+The first two hide unmatched listings and `REJECT_BLACKLIST`; choosing a
+verdict filters within the view. Filters and the recent verdict tally fold away.
+
+Each listing is a **card**: verdict and % below FMV first, then the title and
+reference, a fixed strip of price, max bid and headroom (sage when under the
+max bid, terracotta when over), the important caveats, and the three label
+buttons. Auction cards add end time and bid count. A label tap returns to the
+page it came from; the form carries that path, honoured only if it is local,
+because the page sends no Referer. The item page leads with the same three
+figures and FMV, then Open on eBay, then the evidence as cards — listing,
+seller, reference, gates, the valuation ledger, labels. The Catalogue is a card
+per reference on a phone and the full table on a wide screen; the other pages
+are cards throughout.
 
 The Catalogue page's **Observed** column is the median closing price of sold
 auctions per entry, with the count behind it, blank below
