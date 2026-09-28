@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .venv/
 .ruff_cache/
+
+# Claude Design handoff bundle; kept locally, not versioned.
+watchsniper design project-handoff.zip
