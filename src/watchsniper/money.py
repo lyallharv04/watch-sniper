@@ -72,6 +72,15 @@ def fmt(pence: Pence | None) -> str:
     return f"{sign}£{p // 100:,}.{p % 100:02d}"
 
 
+def fmt_usd_micro(micro: int | None) -> str:
+    """Model spend, stored as integer micro-USD, for display. Not pence and
+    never added to pence: it is what the verification models cost to ask,
+    shown to a tenth of a cent because one call costs less than a cent."""
+    if micro is None:
+        return "—"
+    return f"${micro // 1_000_000}.{micro % 1_000_000 // 1_000:03d}"
+
+
 def mul_bp(pence: Pence, bp: int) -> Pence:
     """pence x (bp / 10_000), rounded *down*. Use for value and income."""
     return (pence * bp) // 10_000

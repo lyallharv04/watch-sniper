@@ -782,6 +782,48 @@ class Database:
             " JOIN listings l ON l.item_id = r.item_id"
         )
 
+    def add_llm_label(self, result_id: int, correct: bool, note: str = "") -> None:
+        """Right or wrong, on one model result. The latest label counts."""
+        row = self.one("SELECT item_id FROM llm_results WHERE id=?", (result_id,))
+        if row is None:
+            return
+        self.execute(
+            "INSERT INTO llm_labels (llm_result_id,item_id,correct,note,created_at_utc)"
+            " VALUES (?,?,?,?,?)",
+            (result_id, row["item_id"], int(correct), note, _iso(utcnow())),
+        )
+        self.audit("operator", f"llm_label:{'right' if correct else 'wrong'}", str(result_id))
+
+    def llm_label_state(self, item_id: str) -> dict[int, bool]:
+        """The latest right/wrong label per result of one item."""
+        return {
+            r["llm_result_id"]: bool(r["correct"])
+            for r in self.query(
+                "SELECT llm_result_id, correct FROM llm_labels WHERE id IN"
+                " (SELECT MAX(id) FROM llm_labels WHERE item_id=? GROUP BY llm_result_id)",
+                (item_id,),
+            )
+        }
+
+    def llm_label_tally(self) -> list[sqlite3.Row]:
+        """Per model, counting each result's latest label once: right, wrong."""
+        return self.query(
+            "SELECT r.model, SUM(l.correct) right_n, SUM(1-l.correct) wrong_n"
+            " FROM llm_labels l JOIN llm_results r ON r.id = l.llm_result_id"
+            " WHERE l.id IN (SELECT MAX(id) FROM llm_labels GROUP BY llm_result_id)"
+            " GROUP BY r.model ORDER BY r.model"
+        )
+
+    def llm_review_sample(self, limit: int = 20) -> list[sqlite3.Row]:
+        """A fresh random sample of results live mode would have rejected,
+        so the models' false negatives get labelled as well as their passes."""
+        return self.query(
+            "SELECT r.*, l.title FROM llm_results r"
+            " JOIN listings l ON l.item_id = r.item_id"
+            " WHERE r.would_verdict = 'REJECT_LLM' ORDER BY random() LIMIT ?",
+            (limit,),
+        )
+
     def update_llm_would(
         self, result_id: int, verdict: str | None, mab: int | None, reason: str
     ) -> None:

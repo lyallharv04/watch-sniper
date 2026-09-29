@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config as C
 from .models import parse_ts
-from .money import fmt, parse_gbp
+from .money import fmt, fmt_usd_micro, parse_gbp
 from .poller import Engine
 
 MONO = "ui-monospace,Menlo,Consolas,monospace"
@@ -298,6 +298,13 @@ font-variant-numeric:tabular-nums}
 text-transform:uppercase;padding:10px;font-weight:700}
 .tablecard td{padding:11px 10px;border-top:1px solid var(--line);vertical-align:top}
 .tablecard .r{text-align:right;white-space:nowrap}
+.llm{border-top:1px solid var(--line);padding:12px 0 4px}
+.llmhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px}
+.llmhead b{font-size:13.5px}.llmhead span{font-size:12px;color:var(--mute)}
+.labels.two{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}
+details.raw summary{font-size:12.5px;color:var(--mute);cursor:pointer;padding:6px 0}
+details.raw pre{white-space:pre-wrap;word-break:break-word;font-size:11.5px;
+font-family:ui-monospace,Menlo,Consolas,monospace;max-height:320px;overflow:auto}
 """
 
 #: (label, href, name used to mark it active)
@@ -318,8 +325,8 @@ LABELS = [
 LABEL_NAMES = dict(LABELS)
 
 VERDICT_OPTIONS = [
-    "", "all", "DEAL", "REJECT_CATALOGUE", "REJECT_BLACKLIST",
-    "REJECT_SELLER", "REJECT_VIABLE", "REJECT_PRICE",
+    "", "all", "DEAL", "CHECK", "REJECT_CATALOGUE", "REJECT_BLACKLIST",
+    "REJECT_SELLER", "REJECT_VIABLE", "REJECT_PRICE", "REJECT_LLM",
 ]
 VERDICT_NAMES = {"": "default", "all": "all"}
 
@@ -542,6 +549,81 @@ def safe_next(value: str) -> str:
     return "/"
 
 
+def llm_label_form(result_id: int, state: bool | None, back: str) -> str:
+    """Right or wrong, on one model's answer. One tap, like the listing
+    labels; the latest tap is the one that counts."""
+    buttons = "".join(
+        f'<button name="correct" value="{v}"{" class=on" if state is want else ""}>'
+        f'{"✓ " if state is want else ""}{text}</button>'
+        for v, want, text in (("1", True, "model right"), ("0", False, "model wrong"))
+    )
+    return (
+        '<form method="post" action="/llm-label" class="labels two">'
+        f'<input type="hidden" name="result_id" value="{result_id}">'
+        f'<input type="hidden" name="next" value="{e(back)}">{buttons}</form>'
+    )
+
+
+def llm_card(r: sqlite3.Row, state: bool | None, back: str) -> str:
+    """One stored model answer, as stored. What it would have meant is the
+    would_* columns, computed by valuation; nothing is worked out here."""
+
+    def kv(k, v, cls=""):
+        return f'<div class="kv"><span>{e(k)}</span><span class="{cls}">{v}</span></div>'
+
+    def label(v) -> str:
+        return e(v.lower().replace("_", " ")) if v else "not stated"
+
+    evidence = json.loads(r["evidence_json"] or "[]")
+    flags = json.loads(r["red_flags_json"] or "[]")
+    quotes = "<br>".join(
+        f'{e(q.get("source"))}: “{e(q.get("text"))}”' for q in evidence
+    ) or "none quoted"
+    verified = (
+        '<span class="pos">found in the listing</span>' if r["evidence_verified"]
+        else '<span class="accent">not found in the listing</span>'
+    )
+    rows = []
+    if r["ok"]:
+        rows += [
+            kv("Identified", e(r["catalogue_key"] or "none of the candidates"), "mono"),
+            kv("Confidence", e(r["confidence"])),
+            kv("Condition", label(r["condition"])),
+            kv("Box / papers", label(r["box_papers"])),
+            kv("Bracelet", label(r["bracelet"])),
+            kv("Evidence", f"{quotes}<br>{verified}"),
+            kv("Red flags", "<br>".join(e(f) for f in flags) or "none",
+               "accent" if flags else ""),
+            kv("Reason", e(r["reason"])),
+        ]
+    else:
+        rows.append(kv("Error", e(r["error"]), "accent"))
+    if r["would_verdict"] or r["would_reason"]:
+        rows.append(kv(
+            "Live mode would say",
+            f'{e(r["would_verdict"] or "—")} · {e(r["would_reason"])}',
+        ))
+    if r["would_mab_pence"] is not None:
+        rows.append(kv("Max bid on that reading", fmt(r["would_mab_pence"])))
+    if r["escalated_from"]:
+        rows.append(kv("Escalated from", f'result {r["escalated_from"]}'))
+    rows.append(kv(
+        "Tokens · cost · time",
+        f'{r["input_tokens"]} in, {r["output_tokens"]} out · '
+        f'{fmt_usd_micro(r["cost_micro_usd"])} · {r["latency_ms"]} ms',
+    ))
+    rows.append(kv(
+        "Prompt · candidates",
+        f'{e(r["prompt_version"])} · {e(r["candidate_hash"])}', "mono",
+    ))
+    chips = verdict_chip(r["would_verdict"]) if r["would_verdict"] else ""
+    return f"""<div class="llm" id="llm-{r['id']}">
+<div class="llmhead"><b>{e(r['model'])}</b>{chips}<span>{e(r['stage'])} · {when(r['requested_at_utc'])} · result {r['id']}</span></div>
+{"".join(rows)}
+<details class="raw"><summary>Raw response</summary><pre>{e(r['raw_response'])}</pre></details>
+{llm_label_form(r['id'], state, back)}</div>"""
+
+
 def feed_card(r: sqlite3.Row, back: str = "/") -> str:
     caveats = json.loads(r["caveats_json"] or "[]")
     fmv = r["fmv_pence"]
@@ -736,6 +818,19 @@ def render_item(engine: Engine, item_id: str) -> str:
 <div class="valhead">Reference FMV {fmt(derivation['fmv_reference'])} × {e(derivation['condition'])}{assumed} = <strong>{fmt(derivation['effective_fmv'])} effective</strong></div>
 <div class="ledger">{"".join(line(k, v) for k, v in derivation["lines"])}</div>{warn}</div>"""
 
+    back = f"/item/{urllib.parse.quote(item_id, safe='')}"
+    results = engine.db.llm_results_for(item_id)
+    llm_section = ""
+    if results:
+        state = engine.db.llm_label_state(item_id)
+        llm_section = (
+            '<div class="card sec"><h3>Verification models — shadow</h3>'
+            '<div class="reason">Shadow mode: these answers changed nothing above. '
+            '<a href="/llm-review">Review sample</a></div>'
+            + "".join(llm_card(r, state.get(r["id"]), back) for r in results)
+            + "</div>"
+        )
+
     label_log = "".join(
         f'<div class="lab"><b>{e(LABEL_NAMES.get(r["label"], r["label"]))}</b>'
         f'<span>{when(r["created_at_utc"])} · verdict then {e(r["verdict_at_time"] or "—")}</span></div>'
@@ -759,6 +854,7 @@ def render_item(engine: Engine, item_id: str) -> str:
 <div class="card sec"><h3>Reference</h3>{reference}</div>
 <div class="card sec"><h3>Gates</h3>{gate_rows}</div>
 {valuation}
+{llm_section}
 <div class="card sec"><h3>Your labels</h3>{label_log}</div>
 </div>"""
 
@@ -862,6 +958,26 @@ def render_health(engine: Engine) -> str:
         for r in engine.db.recent_notifications()
     ) or '<div class="note"><span>none yet</span></div>'
 
+    stats = "".join(
+        kv(r["model"],
+           f'{r["calls"]} calls · {r["errors"]} errors · {fmt_usd_micro(r["cost"])}',
+           "accent" if r["errors"] else "")
+        for r in engine.db.llm_stats_today()
+    ) or kv("Calls today", "none")
+    llm_err = engine.db.llm_last_error()
+    err_text = (
+        e(f"{llm_err['model']} {when(llm_err['requested_at_utc'])}: {(llm_err['error'] or '')[:140]}")
+        if llm_err else "none"
+    )
+    shadow_err = h["llm_last_error"]
+    llm = f"""<div class="card sec kvlist" style="padding:10px 16px 6px"><h3 style="margin-top:6px">Verification models</h3>
+{kv("Mode", e(h['llm_mode']), "" if h['llm_mode'] == "off" else "accent")}
+{kv("Spend today (UTC)", f"{fmt_usd_micro(h['llm_spent_today_micro_usd'])} of {fmt_usd_micro(h['llm_cap_micro_usd'])} cap")}
+{stats}
+{kv("Last model error", err_text, "accent" if llm_err else "")}
+{kv("Last shadow failure", e(shadow_err[:140]) if shadow_err else "none", "accent" if shadow_err else "")}
+<a class="jsonlink" href="/llm-review">Review sample and labels per model</a></div>"""
+
     return f"""
 <div class="head"><h1 class="page">Health</h1></div>
 <div class="secs" style="padding-top:12px">
@@ -874,11 +990,35 @@ def render_health(engine: Engine) -> str:
 {kv("Alert channel", "ntfy" if engine.notifier.enabled else "none")}
 {kv("Config fingerprint", e(h['fingerprint']), "mono")}
 <a class="jsonlink" href="/api/health">/api/health as JSON</a></div>
+{llm}
 <div class="card sec" style="padding:14px 14px 8px"><h3>Recent polls</h3>
 <div class="pollh"><span>Time</span><span>Kind</span><span>Calls</span><span>Seen</span><span>New</span><span>Alerts</span></div>
 {polls}</div>
 <div class="card sec" style="padding:14px 14px 8px"><h3>Notifications</h3>{notes}</div>
 </div>"""
+
+
+def render_llm_review(engine: Engine) -> str:
+    """Labels on model answers, per model, and a fresh random sample of the
+    answers live mode would have rejected. Live mode waits on these numbers
+    (DECISIONS.md A19), and a rejection nobody looks at is never labelled."""
+    tally = "".join(
+        f'<div class="kv"><span>{e(r["model"])}</span>'
+        f'<span>{r["right_n"]} right · {r["wrong_n"]} wrong</span></div>'
+        for r in engine.db.llm_label_tally()
+    ) or '<div class="kv"><span>No model answer labelled yet.</span></div>'
+    cards = "".join(
+        f'<div class="card sec"><div class="rtitle"><a href="/item/'
+        f'{e(urllib.parse.quote(r["item_id"], safe=""))}#llm-{r["id"]}">{e(r["title"])}</a></div>'
+        + llm_card(r, engine.db.llm_label_state(r["item_id"]).get(r["id"]), "/llm-review")
+        + "</div>"
+        for r in engine.db.llm_review_sample()
+    ) or '<div class="card empty">No answer that live mode would have rejected yet.</div>'
+    return f"""
+<div class="head tight"><h1 class="page">Model review</h1>
+<div class="sub">Shadow mode · labels per model, then a random sample of would-be rejections</div></div>
+<div class="secs"><div class="card sec kvlist" style="padding:10px 16px 6px"><h3 style="margin-top:6px">Labels</h3>{tally}</div>
+{cards}</div>"""
 
 
 def render_constants(engine: Engine) -> str:
@@ -1027,6 +1167,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(page("Not priced", render_missing(eng), eng, active="Not priced"))
             elif path == "/health":
                 self._send(page("Health", render_health(eng), eng, active="Health"))
+            elif path == "/llm-review":
+                self._send(page("Model review", render_llm_review(eng), eng, active="Health"))
             elif path == "/constants":
                 self._send(page("Constants", render_constants(eng), eng, active="Constants"))
             elif path == "/outcomes":
@@ -1080,6 +1222,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._redirect(safe_next(get("next")))
             else:
                 self._back()
+        elif path == "/llm-label":
+            if get("result_id").isdigit() and get("correct") in ("0", "1"):
+                eng.db.add_llm_label(int(get("result_id")), get("correct") == "1", get("note"))
+            self._redirect(safe_next(get("next")) if get("next") else "/llm-review")
         elif path == "/reload":
             eng.reload_catalogue()
             self._redirect("/catalogue")

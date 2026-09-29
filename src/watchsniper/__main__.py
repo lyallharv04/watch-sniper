@@ -7,7 +7,7 @@ import sys
 import time
 
 from . import config as C
-from .money import fmt
+from .money import fmt, fmt_usd_micro
 
 COMMANDS = """
   diagnose      one-shot live API check. Run this first, before anything else
@@ -325,11 +325,6 @@ def cmd_rescore() -> int:
     return 0
 
 
-def _usd(micro: int) -> str:
-    """Micro-USD as dollars and cents, for the terminal. Formatting only."""
-    return f"${micro // 1_000_000}.{micro % 1_000_000 // 10_000:02d}"
-
-
 def cmd_llm_check() -> int:
     """Is every configured model id one the provider lists for this key?
 
@@ -393,7 +388,7 @@ def cmd_llm_backfill(args) -> int:
     for i, row in enumerate(rows, 1):
         stored += len(shadow.run(listing_from_row(row), "listing"))
         spent = engine.db.llm_spent_today()
-        print(f"  {i}/{len(rows)}  {row['item_id']}  results {stored}  spent today {_usd(spent)}")
+        print(f"  {i}/{len(rows)}  {row['item_id']}  results {stored}  spent today {fmt_usd_micro(spent)}")
         if spent >= C.LLM_DAILY_SPEND_CAP_MICRO_USD:
             print("Daily spend cap reached; run again after midnight UTC.")
             break
