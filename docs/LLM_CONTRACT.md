@@ -222,7 +222,7 @@ proxy. `python -m watchsniper llm-check` makes that check on the deployed host.
 
 | | Anthropic | Gemini |
 |---|---|---|
-| Shadow model | `claude-haiku-4-5` | `gemini-3.8-flash` (current GA Flash; `gemini-3-flash-preview` is deprecated, its replacement is named as `gemini-3.6-flash`) |
+| Shadow model | `claude-haiku-4-5-20251001` (the id the Models API lists; `claude-haiku-4-5` is an alias it does not list) | `gemini-3.8-flash` (current GA Flash; `gemini-3-flash-preview` is deprecated, its replacement is named as `gemini-3.6-flash`) |
 | Escalation | `claude-sonnet-5-5` | — |
 | Endpoint | `POST https://api.anthropic.com/v1/messages` | `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` |
 | Auth | `x-api-key`, `anthropic-version: 2023-06-01` | `x-goog-api-key` |

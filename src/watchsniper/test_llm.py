@@ -34,7 +34,7 @@ from .llm import (
 
 ANTHROPIC_KEY = "sk-ant-test-FAKEKEY-0123456789abcdef"
 GEMINI_KEY = "AIza-test-FAKEKEY-0123456789abcdef"
-HAIKU = "claude-haiku-4-5"
+HAIKU = "claude-haiku-4-5-20251001"
 GEMINI = "gemini-3.8-flash"
 SONNET = "claude-sonnet-5-5"
 IMAGE_BYTES = b"\x89PNG\r\n\x1a\nfake-image-bytes"

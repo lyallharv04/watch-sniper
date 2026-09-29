@@ -27,6 +27,15 @@ from .money import compose_bp, fmt, mul_bp, mul_bp_ceil, parse_api_amount, parse
 from .valuation import Valuer, read_bracelet, read_condition, read_scope
 
 ROOT = C.ROOT
+
+# A host in shadow mode has LLM_MODE=shadow and real provider keys in .env,
+# which config.py has already loaded. The suite must neither depend on that
+# nor act on it: with these off, no Engine a test builds can reach a model.
+# Every feature suite that builds an Engine imports this module, so this holds
+# for each of them; test_llm injects its own fake keys and transport.
+C.LLM_MODE = "off"
+C.ANTHROPIC_API_KEY = None
+C.GEMINI_API_KEY = None
 CORPUS = ROOT / "tests" / "corpus.toml"
 
 

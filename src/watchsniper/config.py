@@ -343,7 +343,7 @@ CANDIDATE_MARGIN_BP = 1500
 LLM_CANDIDATES = 3
 
 # Run on every candidate in shadow mode, so their answers can be compared.
-LLM_SHADOW_MODELS = ("claude-haiku-4-5", "gemini-3.8-flash")
+LLM_SHADOW_MODELS = ("claude-haiku-4-5-20251001", "gemini-3.8-flash")
 # Run once more when a shadow model answers below `high` confidence.
 LLM_ESCALATION_MODEL = "claude-sonnet-5-5"
 
@@ -353,7 +353,7 @@ LLM_ESCALATION_MODEL = "claude-sonnet-5-5"
 # pages; Google's rate for the Flash model is scheduled to double on
 # 2027-01-01, so it is in UNVERIFIED below.
 LLM_PRICE_MICRO_USD_PER_MTOK: dict[str, tuple[int, int]] = {
-    "claude-haiku-4-5": (1_000_000, 5_000_000),
+    "claude-haiku-4-5-20251001": (1_000_000, 5_000_000),
     "gemini-3.8-flash": (750_000, 3_750_000),
     "claude-sonnet-5-5": (2_000_000, 10_000_000),
 }

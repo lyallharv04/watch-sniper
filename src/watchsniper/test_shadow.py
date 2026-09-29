@@ -217,10 +217,18 @@ class TestWouldVerdict(ShadowCase):
 
 class TestNothingChanges(ShadowCase):
     def test_off_by_default(self):
-        self.assertEqual(C.LLM_MODE, "off")
+        # The built-in default, not whatever this host's .env says.
+        registered = next(v for v in C.ENV_VARS if v["name"] == "LLM_MODE")
+        self.assertEqual(registered["default"], "off")
+        from unittest import mock
+
         from .poller import Engine
 
-        self.assertIsNone(Engine(self.db).shadow)
+        for mode in ("off", "live", ""):
+            with mock.patch.object(C, "LLM_MODE", mode):
+                self.assertIsNone(Engine(self.db).shadow, mode)
+        with mock.patch.object(C, "LLM_MODE", "shadow"):
+            self.assertIsNotNone(Engine(self.db).shadow)
 
     def test_sweep_runs_shadow_without_touching_verdict_or_alerts(self):
         before = self.db.one("SELECT verdict FROM verdicts WHERE item_id=?", (self.lst.item_id,))
