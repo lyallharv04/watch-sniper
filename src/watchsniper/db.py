@@ -45,7 +45,12 @@ CREATE TABLE IF NOT EXISTS listings (
     item_location_country    TEXT NOT NULL,
     end_time_utc             TEXT,
     category_id              TEXT NOT NULL,
-    raw_json                 TEXT NOT NULL
+    raw_json                 TEXT NOT NULL,
+    -- Set from getItem once a listing is known to have ended (CLAUDE.md §6).
+    -- end_state is 'sold', 'unsold' or 'gone' (getItem 404).
+    ended_at_utc             TEXT,
+    end_state                TEXT,
+    end_checked_at_utc       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS verdicts (
@@ -205,6 +210,19 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
+#: What the dashboard needs to mark an ended listing, computed here so the page
+#: compares no dates. Takes one parameter: now, as ISO-8601 UTC. An auction past
+#: its end time is ended even before the closing check has fetched it.
+_END_COLUMNS = """
+    CASE WHEN l.ended_at_utc IS NOT NULL
+           OR (l.is_auction = 1 AND l.end_time_utc <= ?) THEN 1 ELSE 0 END AS is_ended,
+    COALESCE(l.ended_at_utc, CASE WHEN l.is_auction = 1 THEN l.end_time_utc END)
+        AS ended_display_utc,
+    CASE WHEN l.is_auction = 0 AND COALESCE(v.catalogue_key, '') = ''
+         THEN 1 ELSE 0 END AS end_not_checked
+"""
+
+
 def _midnight_utc() -> datetime:
     return utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -235,9 +253,12 @@ class Database:
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
             # Columns added after their tables; older files lack them.
-            for table, column in (
-                ("notifications", "price_pence"),
-                ("closings", "sold"),
+            for table, column, kind in (
+                ("notifications", "price_pence", "INTEGER"),
+                ("closings", "sold", "INTEGER"),
+                ("listings", "ended_at_utc", "TEXT"),
+                ("listings", "end_state", "TEXT"),
+                ("listings", "end_checked_at_utc", "TEXT"),
             ):
                 existing = {
                     r["name"]
@@ -245,7 +266,7 @@ class Database:
                 }
                 if column not in existing:
                     self._conn.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} INTEGER"
+                        f"ALTER TABLE {table} ADD COLUMN {column} {kind}"
                     )
             self._conn.commit()
 
@@ -295,6 +316,8 @@ class Database:
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(item_id) DO UPDATE SET
                     last_seen_utc=excluded.last_seen_utc,
+                    ended_at_utc=NULL,
+                    end_state=NULL,
                     price_pence=excluded.price_pence,
                     shipping_pence=excluded.shipping_pence,
                     bid_count=excluded.bid_count,
@@ -393,9 +416,11 @@ class Database:
         exact verdict within the view. Unpriced rows sort last, newest first.
         """
         where, params = ["1=1"], []
+        now = utcnow().replace(microsecond=0)
         if verdict != "all":
+            # The two views never show an ended listing; "all" shows it marked.
+            where.append("l.ended_at_utc IS NULL")
             if view == "auctions":
-                now = utcnow().replace(microsecond=0)
                 where.append(
                     "l.is_auction = 1 AND l.end_time_utc > ? AND l.end_time_utc <= ?"
                 )
@@ -420,7 +445,7 @@ class Database:
                    v.catalogue_key, v.fmv_verified, v.fmv_pence, v.mab_pence,
                    v.price_pence AS eff_price_pence, v.price_basis,
                    v.headroom_pence, v.below_fmv_bp, v.caveats_json, v.scope,
-                   v.bracelet,
+                   v.bracelet, {_END_COLUMNS},
                    (SELECT group_concat(label) FROM labels
                      WHERE labels.item_id = l.item_id) AS labels
               FROM listings l JOIN verdicts v ON v.item_id = l.item_id
@@ -429,7 +454,7 @@ class Database:
                       l.first_seen_utc DESC
              LIMIT ? OFFSET ?
             """,
-            params,
+            [_iso(now), *params],
         )
 
     def verdict_counts(self, since_hours: int = 24 * 14) -> list[sqlite3.Row]:
@@ -507,10 +532,10 @@ class Database:
             " v.catalogue_display, v.fmv_verified, v.fmv_pence, v.mab_pence,"
             " v.price_pence AS eff_price_pence, v.price_basis, v.headroom_pence,"
             " v.below_fmv_bp, v.derivation_json, v.config_fingerprint,"
-            " v.computed_at_utc"
+            f" v.computed_at_utc, {_END_COLUMNS}"
             " FROM listings l"
             " LEFT JOIN verdicts v ON v.item_id = l.item_id WHERE l.item_id = ?",
-            (item_id,),
+            (_iso(utcnow()), item_id),
         )
 
     # -- labels, outcomes, audit ------------------------------------------
@@ -831,6 +856,57 @@ class Database:
             "UPDATE llm_results SET would_verdict=?, would_mab_pence=?,"
             " would_reason=? WHERE id=?",
             (verdict, mab, reason, result_id),
+        )
+
+    # -- ended listings ------------------------------------------------------
+
+    def mark_ended(
+        self, item_id: str, ended_at: datetime | None, state: str, checked_at: datetime
+    ) -> None:
+        self.execute(
+            "UPDATE listings SET ended_at_utc=?, end_state=?, end_checked_at_utc=?"
+            " WHERE item_id=?",
+            (_iso(ended_at or checked_at), state, _iso(checked_at), item_id),
+        )
+
+    def mark_checked_live(self, item_id: str, checked_at: datetime) -> None:
+        self.execute(
+            "UPDATE listings SET end_checked_at_utc=? WHERE item_id=?",
+            (_iso(checked_at), item_id),
+        )
+
+    def listings_to_check_ended(
+        self, not_seen_since: datetime, checked_before: datetime, limit: int
+    ) -> list[str]:
+        """Catalogue-matched Buy It Now listings that the latest sweep did not
+        return, not known to have ended, and not checked since
+        `checked_before`. Never-checked first, then the longest since a check.
+
+        A listing the sweep did return needs no check: search returns only
+        live listings. One it did not return has either ended or aged off the
+        first page, and only getItem can say which.
+        """
+        return [
+            r["item_id"]
+            for r in self.query(
+                "SELECT l.item_id FROM listings l JOIN verdicts v ON v.item_id = l.item_id"
+                " WHERE l.is_auction = 0 AND v.catalogue_key <> ''"
+                " AND l.ended_at_utc IS NULL AND l.last_seen_utc < ?"
+                " AND (l.end_checked_at_utc IS NULL OR l.end_checked_at_utc < ?)"
+                " ORDER BY l.end_checked_at_utc IS NOT NULL, l.end_checked_at_utc,"
+                " l.last_seen_utc DESC LIMIT ?",
+                (_iso(not_seen_since), _iso(checked_before), limit),
+            )
+        ]
+
+    def unended_bin_details(self) -> list[sqlite3.Row]:
+        """Stored getItem responses for Buy It Now listings not yet marked
+        ended. Auctions are left to the closing check, which fetches them
+        after their end and so reads the final sold state."""
+        return self.query(
+            "SELECT d.item_id, d.raw_json, d.fetched_at_utc FROM item_details d"
+            " JOIN listings l ON l.item_id = d.item_id"
+            " WHERE l.is_auction = 0 AND l.ended_at_utc IS NULL"
         )
 
     def all_listings(self) -> list[sqlite3.Row]:

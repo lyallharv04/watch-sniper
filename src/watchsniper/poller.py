@@ -22,7 +22,7 @@ from . import notify
 from .blacklist import Blacklist, Increments
 from .catalogue import Catalogue
 from .db import Database
-from .details import ItemDetails, from_get_item
+from .details import ItemDetails, end_state, from_get_item
 from .ebay import BudgetExhausted, EbayClient, EbayError
 from .models import from_item_summary, utcnow
 from .valuation import Assessment, Valuer
@@ -62,6 +62,7 @@ class Engine:
         self.shadow = self.build_shadow() if C.LLM_MODE == "shadow" else None
         if db.verdicts_dropped:
             self.rescore_all()
+        self.seed_ended_from_details()
 
     def build_shadow(self, client=None):
         """The verification stage, with the keys in the environment unless a
@@ -123,7 +124,8 @@ class Engine:
         result = PollResult(kind=kind)
         run_id = self.db.start_poll(kind)
         before = self.client.budget.used
-        horizon = utcnow() + C.AUCTION_HORIZON
+        sweep_started = utcnow()
+        horizon = sweep_started + C.AUCTION_HORIZON
         try:
             sort = "newlyListed" if kind == "bin" else "endingSoonest"
             buying = "FIXED_PRICE" if kind == "bin" else "AUCTION"
@@ -172,6 +174,8 @@ class Engine:
                     break
             if kind == "auction":
                 self.record_closings()
+            else:
+                self.check_ended(sweep_started)
             self.last_error = None
         except BudgetExhausted as exc:
             result.error = str(exc)
@@ -223,6 +227,7 @@ class Engine:
             except EbayError as exc:
                 if exc.status == 404:
                     self.db.save_closing(item_id, None, 0, None, "HTTP 404")
+                    self.db.mark_ended(item_id, None, "gone", utcnow())
                     done += 1
                 continue
             # The same response carries what the verification models need;
@@ -240,9 +245,68 @@ class Engine:
                 "" if price is not None else f"no GBP price ({final.currency or 'none'})",
             )
             done += 1
+            ended_at, _ = end_state(row, utcnow())
+            self.db.mark_ended(
+                item_id,
+                ended_at or final.end_time_utc,
+                "ended" if sold_qty is None else "sold" if int(sold_qty) > 0 else "unsold",
+                utcnow(),
+            )
             if self.shadow is not None:
                 self._shadow_closing(item_id, details)
         return done
+
+    def check_ended(self, sweep_started) -> int:
+        """Ask getItem whether shown Buy It Now listings have ended.
+
+        Only catalogue-matched listings the sweep that just ran did not
+        return: a listing in the results is live by construction, because
+        search returns only active listings. Each is checked once when it
+        first drops out and again every ENDED_RECHECK while still live, at
+        most ENDED_CHECKS_PER_SWEEP per sweep. The response also refreshes the
+        stored item details. A 404 is "gone". BudgetExhausted propagates to
+        the sweep, which records it; any other failure waits a sweep.
+        """
+        assert self.client is not None
+        now = utcnow()
+        done = 0
+        for item_id in self.db.listings_to_check_ended(
+            sweep_started, now - C.ENDED_RECHECK, C.ENDED_CHECKS_PER_SWEEP
+        ):
+            try:
+                row = self.client.get_item(item_id, day=_today())
+            except BudgetExhausted:
+                raise
+            except EbayError as exc:
+                if exc.status == 404:
+                    self.db.mark_ended(item_id, None, "gone", now)
+                    done += 1
+                continue
+            self._store_details(item_id, row)
+            ended_at, state = end_state(row, now)
+            if state is None:
+                self.db.mark_checked_live(item_id, now)
+            else:
+                self.db.mark_ended(item_id, ended_at, state, now)
+            done += 1
+        return done
+
+    def seed_ended_from_details(self) -> int:
+        """Mark ended whatever the stored getItem responses already show as
+        ended, without a call. Runs at start-up; cheap and idempotent."""
+        import json
+
+        from .models import parse_ts
+
+        now = utcnow()
+        n = 0
+        for r in self.db.unended_bin_details():
+            ended_at, state = end_state(json.loads(r["raw_json"]), now)
+            if state is not None:
+                checked = parse_ts(r["fetched_at_utc"]) or now
+                self.db.mark_ended(r["item_id"], ended_at, state, checked)
+                n += 1
+        return n
 
     def _shadow_closing(self, item_id: str, details: ItemDetails) -> None:
         """At close, ask the models what a catalogue-matched auction was, so

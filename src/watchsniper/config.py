@@ -249,6 +249,12 @@ AUCTION_HORIZON = timedelta(days=3)
 # keeps returning ended auctions with the final bid, so this only needs to be
 # long enough for eBay to settle the result.
 CLOSING_CHECK_DELAY = timedelta(minutes=5)
+# Buy It Now listings leave the sweep's first page when they end and when they
+# are merely pushed back by newer ones, so a matched listing the sweep stops
+# returning is checked with getItem: on the next sweep, then again after this
+# long while it is still live. At most ENDED_CHECKS_PER_SWEEP per sweep.
+ENDED_RECHECK = timedelta(hours=24)
+ENDED_CHECKS_PER_SWEEP = 10
 # The dashboard's auction view shows auctions ending within this window.
 AUCTION_ENDING_SOON = timedelta(hours=6)
 # The catalogue page shows an observed median closing price only when at least

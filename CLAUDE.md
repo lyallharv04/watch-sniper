@@ -231,8 +231,22 @@ returning ended auctions with their final `currentBidPrice`, `bidCount` and
 count, whether it had bids, and `sold` (`estimatedSoldQuantity` above zero). An
 auction with bids that missed its reserve has bids and is not sold. An absent
 sold field is stored as unknown, never as unsold. A 404 is stored without a
-price so it is not retried; any other failure retries next sweep. Buy It Now
-disappearances are not tracked.
+price so it is not retried; any other failure retries next sweep. The closing
+also marks the auction ended, with whether it sold.
+
+### Ended Buy It Now listings
+
+Search returns only live listings, so a listing in the sweep's results is live.
+One it stops returning has either ended or been pushed off the first page by
+newer ones, and only getItem can say which. After each Buy It Now sweep, the
+catalogue-matched listings it did not return are checked — on the first sweep
+they drop out, then every `ENDED_RECHECK` while still live, at most
+`ENDED_CHECKS_PER_SWEEP` a sweep. A live listing's getItem carries no
+`itemEndDate`; an ended one carries it in the past, and `estimatedSoldQuantity`
+says whether it sold. The availability status is not enough: ended auctions
+still report `IN_STOCK`. A 404 is recorded as gone. The stored getItem
+responses seed this at start-up without a call. Unmatched Buy It Now listings
+are not checked. A listing that reappears in a sweep is live again.
 
 **Limited Release APIs are not used and must not be.** The Offer API needs a
 user token, which is the one thing this system must not hold. The Order API is
@@ -332,7 +346,10 @@ so the web layer still does no arithmetic):
   under a standing caution that the price is only the next valid bid.
 - **All** — `/?verdict=all`, every listing in either format.
 
-The first two hide unmatched listings and `REJECT_BLACKLIST`; choosing a
+The first two never show an ended listing. "All" and the item page show it
+with an ENDED mark — when, and whether it sold — and mark an unmatched Buy It
+Now "end not checked". The first two hide unmatched listings and
+`REJECT_BLACKLIST`; choosing a
 verdict filters within the view — `CHECK` and `REJECT_LLM` included, for live
 mode. Filters and the recent verdict tally fold away.
 

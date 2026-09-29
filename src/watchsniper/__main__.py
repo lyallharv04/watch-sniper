@@ -367,10 +367,15 @@ def cmd_llm_backfill(args) -> int:
     standing stock. Each answer is cached, so running it twice costs nothing
     the second time; it stops quietly at the daily spend cap.
     """
+    from .models import utcnow
+
     engine = _engine()
     rows = engine.db.query(
         "SELECT l.* FROM listings l JOIN verdicts v ON v.item_id = l.item_id"
-        " WHERE v.llm_candidate = 1 ORDER BY l.first_seen_utc DESC"
+        " WHERE v.llm_candidate = 1 AND l.ended_at_utc IS NULL"
+        " AND NOT (l.is_auction = 1 AND l.end_time_utc <= ?)"
+        " ORDER BY l.first_seen_utc DESC",
+        (utcnow().isoformat(),),
     )
     if args.limit is not None:
         rows = rows[: args.limit]

@@ -624,6 +624,27 @@ def llm_card(r: sqlite3.Row, state: bool | None, back: str) -> str:
 {llm_label_form(r['id'], state, back)}</div>"""
 
 
+END_STATE_TEXT = {
+    "sold": "sold",
+    "unsold": "not sold",
+    "gone": "removed",
+    "ended": "sale unknown",
+}
+
+
+def ended_chip(r: sqlite3.Row) -> str:
+    """ENDED, when it ended and whether it sold; or, for a Buy It Now the
+    ended check does not cover, that it has not been checked. All of it is
+    decided in the query; this only words it."""
+    if r["is_ended"]:
+        state = END_STATE_TEXT.get(r["end_state"] or "", "")
+        detail = " · ".join(x for x in (when(r["ended_display_utc"]), state) if x)
+        return f'<span class="cav warn">ENDED · {e(detail)}</span>'
+    if r["end_not_checked"]:
+        return '<span class="cav">end not checked</span>'
+    return ""
+
+
 def feed_card(r: sqlite3.Row, back: str = "/") -> str:
     caveats = json.loads(r["caveats_json"] or "[]")
     fmv = r["fmv_pence"]
@@ -644,7 +665,7 @@ def feed_card(r: sqlite3.Row, back: str = "/") -> str:
 <div class="strip"><div><span class="lbl">Price</span><b>{fmt(r['eff_price_pence'])}</b><small>{e(r['price_basis'])}</small></div>
 <div><span class="lbl">Max bid</span><b>{fmt(r['mab_pence'])}</b></div>
 <div><span class="lbl">Headroom</span>{headroom(r['headroom_pence'])}</div></div>
-<div class="cavs">{caveat_chips(caveats, only_important=True)}</div>
+<div class="cavs">{ended_chip(r)}{caveat_chips(caveats, only_important=True)}</div>
 {label_form(r['item_id'], (r['labels'] or '').split(','), back=back)}
 </article>"""
 
@@ -769,6 +790,8 @@ def render_item(engine: Engine, item_id: str) -> str:
         kv("Format", "Auction" if row["is_auction"] else "Buy It Now"),
         kv("Bids", e(row["bid_count"] if row["bid_count"] is not None else "—")),
         kv("Ends", when(row["end_time_utc"])),
+        kv("Ended", ended_chip(row) or ("live when last checked " + when(row["end_checked_at_utc"])
+                                         if row["end_checked_at_utc"] else "not known to have ended")),
         kv("Condition", e(row["condition_raw"] or "—")),
         kv("Scope / bracelet", e(" · ".join(
             v.lower().replace("_", " ") for v in (row["scope"], row["bracelet"]) if v
@@ -838,7 +861,7 @@ def render_item(engine: Engine, item_id: str) -> str:
     ) or '<div class="lab"><span>none yet</span></div>'
 
     return f"""
-<div class="ihead"><div class="cavs" style="align-items:center">{verdict_chip(row['verdict'])}{caveat_chips(caveats, only_important=True)}</div>
+<div class="ihead"><div class="cavs" style="align-items:center">{verdict_chip(row['verdict'])}{ended_chip(row)}{caveat_chips(caveats, only_important=True)}</div>
 <h1>{e(row['title'])}</h1><div class="reason">{e(row['primary_reason'])}</div></div>
 <div class="summary"><div class="card">
 <div class="big3"><div><span class="lbl">Price</span><b>{fmt(price)}</b><small>{e(basis)}</small></div>

@@ -115,6 +115,27 @@ class _TextExtractor(HTMLParser):
     # not overriding their handlers.
 
 
+def end_state(row: dict, now: datetime) -> tuple[datetime | None, str | None]:
+    """(when it ended, 'sold' | 'unsold'), or (None, None) while it is live.
+
+    Measured on 91 live getItem responses (2026-09-29): a live Buy It Now
+    carries no `itemEndDate` at all; an ended one carries it in the past, and
+    `estimatedSoldQuantity` above zero says it sold. The availability status
+    alone is not enough — ended auctions still report IN_STOCK — so it only
+    settles a listing that is sold out without an end date.
+    """
+    from .models import parse_ts
+
+    ended = parse_ts(row.get("itemEndDate"))
+    availability = (row.get("estimatedAvailabilities") or [{}])[0] or {}
+    sold = int(availability.get("estimatedSoldQuantity") or 0) > 0
+    if ended is not None and ended <= now:
+        return ended, "sold" if sold else "unsold"
+    if availability.get("estimatedAvailabilityStatus") == "OUT_OF_STOCK" and sold:
+        return None, "sold"
+    return None, None
+
+
 def html_to_text(html: str, max_chars: int) -> str:
     """Visible text only: script, style and comments dropped, entities
     decoded, whitespace collapsed, cut to `max_chars`. Block-level tags
