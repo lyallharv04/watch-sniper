@@ -20,8 +20,10 @@ Restart=always
 RestartSec=15
 
 # The process reads listings and writes one SQLite file. It has no reason to
-# touch anything else, and it holds no credential that can spend money — but a
-# read-only feed with a wide blast radius is still a wide blast radius.
+# touch anything else, and it holds no credential that can bid or buy on eBay.
+# It does hold LLM API keys (.env) for the verification models, which spend
+# money per call; LLM_DAILY_SPEND_CAP_MICRO_USD caps that per UTC day. Either
+# way, a read-only feed with a wide blast radius is still a wide blast radius.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
