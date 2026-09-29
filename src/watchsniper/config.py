@@ -343,15 +343,18 @@ CANDIDATE_MARGIN_BP = 1500
 LLM_CANDIDATES = 3
 
 # Run on every candidate in shadow mode, so their answers can be compared.
-LLM_SHADOW_MODELS = ("claude-haiku-4-5", "gemini-3-flash-preview")
+LLM_SHADOW_MODELS = ("claude-haiku-4-5", "gemini-3.8-flash")
 # Run once more when a shadow model answers below `high` confidence.
 LLM_ESCALATION_MODEL = "claude-sonnet-5-5"
 
-# Price per million tokens, integer micro-USD: (input, output). Spend is
-# accounted from each response's reported token usage and rounds up.
+# Price per million tokens, integer micro-USD: (input, output), output
+# including any thinking. Spend is accounted from each response's reported
+# token usage and rounds up. Confirmed 2026-09-29 from the providers' pricing
+# pages; Google's rate for the Flash model is scheduled to double on
+# 2027-01-01, so it is in UNVERIFIED below.
 LLM_PRICE_MICRO_USD_PER_MTOK: dict[str, tuple[int, int]] = {
     "claude-haiku-4-5": (1_000_000, 5_000_000),
-    "gemini-3-flash-preview": (500_000, 3_000_000),
+    "gemini-3.8-flash": (750_000, 3_750_000),
     "claude-sonnet-5-5": (2_000_000, 10_000_000),
 }
 # Across all models, per UTC day. When reached, calls stop until midnight UTC
@@ -365,6 +368,9 @@ LLM_IMAGE_MAX_BYTES = 1_500_000
 # Seller description, HTML stripped, cut to this many characters.
 LLM_DESCRIPTION_CHARS = 6000
 LLM_MAX_OUTPUT_TOKENS = 1024
+# For a model that thinks before answering (the escalation model, and the
+# Gemini Flash run at its lowest thinking level): room for both.
+LLM_THINKING_MAX_OUTPUT_TOKENS = 8192
 LLM_TIMEOUT_SECONDS = 45
 # Failed calls for one item, stage and model before it stops being retried.
 LLM_MAX_ATTEMPTS = 3
@@ -393,7 +399,8 @@ UNVERIFIED: dict[str, str] = {
     "EBAY_CATEGORY_IDS": "`python -m watchsniper diagnose` — it reports "
     "whether the category resolves on EBAY_GB.",
     "LLM_PRICE_MICRO_USD_PER_MTOK": "The providers' pricing pages. Spend "
-    "accounting only; it moves no valuation.",
+    "accounting only; it moves no valuation. Google's published rate for "
+    "gemini-3.8-flash rises on 2027-01-01.",
 }
 
 # Caveat codes attached to every valuation. Ordered by how much they move the

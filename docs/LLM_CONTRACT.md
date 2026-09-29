@@ -213,6 +213,31 @@ with `run(listing, stage, details=None) -> list[int]` (ids of stored rows).
   model, the last error.
 - `CHECK` and `REJECT_LLM` are known to the feed's verdict filter.
 
-## 10. Confirmed at build time
+## 10. Confirmed at build time — 2026-09-29
 
-Filled in by the build; see the commit that adds the adapters.
+From the providers' current documentation. **Not** yet confirmed by a live
+call: no key for either provider was available to the build, and one
+read-only Models API request failed at TLS on the build machine's inspecting
+proxy. `python -m watchsniper llm-check` makes that check on the deployed host.
+
+| | Anthropic | Gemini |
+|---|---|---|
+| Shadow model | `claude-haiku-4-5` | `gemini-3.8-flash` (current GA Flash; `gemini-3-flash-preview` is deprecated, its replacement is named as `gemini-3.6-flash`) |
+| Escalation | `claude-sonnet-5-5` | — |
+| Endpoint | `POST https://api.anthropic.com/v1/messages` | `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` |
+| Auth | `x-api-key`, `anthropic-version: 2023-06-01` | `x-goog-api-key` |
+| Images | `{"type":"image","source":{"type":"base64","media_type","data"}}`; jpeg, png, gif, webp | `{"inline_data":{"mime_type","data"}}`; jpeg, png, webp — a gif is left out |
+| JSON out | `output_config.format = {type: "json_schema", schema}`; supported on Haiku 4.5 | `generationConfig.responseMimeType` + `responseJsonSchema` (documented as superseded by `responseFormat`; still used here — see below) |
+| Thinking | Haiku: field omitted, none. Sonnet 5.5: cannot be disabled; `output_config.effort = "low"`, `max_tokens` = `LLM_THINKING_MAX_OUTPUT_TOKENS` | `thinkingConfig.thinkingLevel = "low"`; thought tokens billed as output |
+| Failure | `stop_reason` `refusal` or `max_tokens`, or anything but `end_turn` / `stop_sequence` | `promptFeedback.blockReason`, or `finishReason` other than `STOP` |
+| Tokens billed | `usage.input_tokens` (+ cache fields), `usage.output_tokens` (includes thinking) | `usageMetadata.promptTokenCount`; `candidatesTokenCount` + `thoughtsTokenCount` |
+| Price / Mtok | Haiku $1 / $5; Sonnet 5.5 $2 / $10 | $0.75 / $3.75 until 2026-12-31, then $1.50 / $7.50 |
+
+Gemini's older structured-output fields are kept deliberately: they are
+documented and widely deployed, while the newer `responseFormat` shape could
+not be exercised without a key. If Google stops accepting them the call fails
+with an HTTP 400, is stored as an error, and Health shows it — the service is
+rules-only for that model, never wrong. Changing it is `_gemini_body`.
+
+A model id that is neither `claude-*` nor `gemini-*` returns
+`ok=False, error="unknown provider"` and sends nothing.
