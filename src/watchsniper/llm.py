@@ -522,8 +522,44 @@ class UrllibTransport:
         # URLError, socket.timeout (TimeoutError) and ssl.SSLError are OSErrors
         # and propagate, as the Transport protocol says.
 
+    def get_json(
+        self, url: str, headers: dict[str, str], timeout: float
+    ) -> tuple[int, dict]:
+        """GET, for `llm-check` listing a provider's models. Same contract."""
+        req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT, **headers})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=self._ssl) as resp:
+                return resp.status, _load_json(resp.read())
+        except urllib.error.HTTPError as exc:
+            try:
+                raw = exc.read()
+            except OSError:
+                raw = b""
+            return exc.code, _load_json(raw)
+
     def __repr__(self) -> str:
         return "UrllibTransport()"
+
+
+def list_models(provider: str, api_key: str, transport=None) -> tuple[list[str], str | None]:
+    """The model ids a provider says this key can use: (ids, error). Free;
+    no model is run. Used by `llm-check` to confirm the configured ids."""
+    t = transport or UrllibTransport()
+    if provider == "anthropic":
+        url = "https://api.anthropic.com/v1/models?limit=1000"
+        headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
+    else:
+        url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+        headers = {"x-goog-api-key": api_key}
+    try:
+        status, body = t.get_json(url, headers, C.LLM_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001
+        return [], _scrub(f"{type(exc).__name__}: {exc}", api_key)[:_EXCERPT_CHARS]
+    if status != 200:
+        return [], f"HTTP {status}: {_excerpt(body, api_key)}"
+    if provider == "anthropic":
+        return [m.get("id", "") for m in body.get("data") or []], None
+    return [m.get("name", "").removeprefix("models/") for m in body.get("models") or []], None
 
 
 # --------------------------------------------------------------------------

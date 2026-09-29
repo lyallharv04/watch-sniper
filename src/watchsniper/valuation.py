@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import config as C
-from .blacklist import Blacklist, Hit, Increments, hard_hits
+from .blacklist import Blacklist, Hit, Increments, flag_hits, hard_hits
 from .catalogue import Catalogue, Match, Reference
 from .fees import MaxBid, effective_fmv, max_allowable_bid
 from .models import Listing
@@ -263,6 +263,70 @@ class Valuer:
             business_seller=listing.is_business_seller,
             inbound_postage=listing.shipping,
         )
+
+    def would_verdict(
+        self,
+        listing: Listing,
+        *,
+        ok: bool,
+        catalogue_key: str | None,
+        confidence: str | None,
+        condition: str | None,
+        evidence_verified: bool,
+        red_flags: list[str],
+    ) -> tuple[str | None, Pence | None, str]:
+        """What live mode would have said, from a model's facts. Shadow only:
+        stored beside the model result and never written to the verdict.
+
+        The model names a reference and a grade; the money is this module's.
+        Its grade can only lower the stated one, so a model reading a photo
+        optimistically can never raise the maximum bid. `DEAL` needs every
+        check to pass; anything a human should look at is `CHECK`.
+        """
+        if not ok:
+            return None, None, ""
+        if catalogue_key is None:
+            return "REJECT_LLM", None, "The model identified none of the candidates."
+        ref = self.catalogue.by_key.get(catalogue_key)
+        if ref is None:
+            return None, None, f"{catalogue_key} is no longer in the catalogue."
+        if condition == "FOR_PARTS":
+            return "REJECT_LLM", None, "The model graded it for parts."
+
+        hits = self.blacklist.check(listing.title) + self.blacklist.check(
+            listing.condition_raw
+        )
+        caveats: list[str] = []
+        seller = self._seller_gate(listing, caveats)
+        if hard_hits(hits) or not seller.passed:
+            return None, None, "Not a candidate under the current rules."
+
+        stated = read_condition(listing)
+        grades = [g for g in (stated, condition) if g in C.COND_MULT]
+        grade = min(grades, key=lambda g: C.COND_MULT[g]) if grades else None
+        mab = self.max_bid_for(listing, ref, grade).amount
+        price, _ = self._effective_price(listing)
+        if price is None:
+            return "REJECT_LLM", mab, "No usable price on the listing."
+        if price > mab:
+            if price * 10_000 > mab * (10_000 + C.CANDIDATE_MARGIN_BP):
+                return "REJECT_LLM", mab, "Priced above the maximum bid beyond the margin."
+            return "CHECK", mab, "Priced above the maximum bid, within the margin."
+
+        why = []
+        if confidence != "high":
+            why.append(f"confidence {confidence}")
+        if not evidence_verified:
+            why.append("evidence not found in the listing")
+        if red_flags:
+            why.append(f"{len(red_flags)} red flag{'' if len(red_flags) == 1 else 's'}")
+        if flag_hits(hits):
+            why.append("blacklist flag: " + ", ".join(h.rule_id for h in flag_hits(hits)))
+        if "SELLER_DATA_MISSING" in caveats:
+            why.append("no seller data")
+        if why:
+            return "CHECK", mab, "Needs a look: " + "; ".join(why) + "."
+        return "DEAL", mab, "Identified with high confidence and verified evidence."
 
     def _mark_candidate(
         self, a: Assessment, hits: list[Hit], condition: str | None

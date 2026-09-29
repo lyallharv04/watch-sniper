@@ -57,8 +57,19 @@ class Engine:
         self._stop = threading.Event()
         self._stall_notified = False
         self.last_error: str | None = None
+        # Shadow mode only (CLAUDE.md §6a). Any other value, "live" included,
+        # is off: live mode is not built.
+        self.shadow = self.build_shadow() if C.LLM_MODE == "shadow" else None
         if db.verdicts_dropped:
             self.rescore_all()
+
+    def build_shadow(self, client=None):
+        """The verification stage, with the keys in the environment unless a
+        client is given. Also used by `llm-backfill`, whatever LLM_MODE says."""
+        from .llm import LlmClient
+        from .shadow import Shadow
+
+        return Shadow(self, client or LlmClient(spent_today=self.db.llm_spent_today))
 
     def reload_catalogue(self) -> None:
         """Pick up an edit to catalogue.toml without a restart."""
@@ -82,10 +93,15 @@ class Engine:
         """
         from .db import listing_from_row
 
+        from .shadow import recompute_would
+
         counts: dict[str, int] = {}
         for row in self.db.all_listings():
             a = self.score(listing_from_row(row))
             counts[a.verdict] = counts.get(a.verdict, 0) + 1
+        # Stored model answers are re-judged under the new constants from
+        # their stored facts. No model is called.
+        recompute_would(self)
         self.db.audit("system", "rescore", C.valuation_fingerprint())
         return counts
 
@@ -133,6 +149,8 @@ class Engine:
                         continue
                     is_new = self.db.upsert_listing(listing)
                     assessment = self.score(listing)
+                    if self.shadow is not None and assessment.llm_candidate:
+                        self.shadow.run(listing, "listing")
                     if is_new:
                         result.items_new += 1
                     if self._should_notify(assessment, is_new):
@@ -209,7 +227,7 @@ class Engine:
                 continue
             # The same response carries what the verification models need;
             # keep it rather than fetch the item again later.
-            self._store_details(item_id, row)
+            details = self._store_details(item_id, row)
             final = from_item_summary(row)
             price = final.price if final.currency == "GBP" else None
             availability = (row.get("estimatedAvailabilities") or [{}])[0]
@@ -222,7 +240,23 @@ class Engine:
                 "" if price is not None else f"no GBP price ({final.currency or 'none'})",
             )
             done += 1
+            if self.shadow is not None:
+                self._shadow_closing(item_id, details)
         return done
+
+    def _shadow_closing(self, item_id: str, details: ItemDetails) -> None:
+        """At close, ask the models what a catalogue-matched auction was, so
+        a closing price can later be counted only where the identification is
+        confident. Shadow only: Observed is unchanged."""
+        from .db import listing_from_row
+
+        row = self.db.one(
+            "SELECT l.* FROM listings l JOIN verdicts v ON v.item_id = l.item_id"
+            " WHERE l.item_id = ? AND v.catalogue_key <> ''",
+            (item_id,),
+        )
+        if row is not None:
+            self.shadow.run(listing_from_row(row), "closing", details)
 
     def item_details(self, item_id: str) -> ItemDetails | None:
         """The full item for the verification models: the stored copy, else
@@ -352,4 +386,8 @@ class Engine:
             "catalogue_entries": len(self.catalogue.references),
             "catalogue_unverified": self.catalogue.unverified_count,
             "fingerprint": C.valuation_fingerprint(),
+            "llm_mode": "shadow" if self.shadow is not None else "off",
+            "llm_spent_today_micro_usd": self.db.llm_spent_today(),
+            "llm_cap_micro_usd": C.LLM_DAILY_SPEND_CAP_MICRO_USD,
+            "llm_last_error": self.shadow.last_error if self.shadow else None,
         }

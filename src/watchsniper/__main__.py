@@ -21,6 +21,10 @@ COMMANDS = """
   constants     print every constant and whether it has been verified
   env-example   regenerate .env.example from the variables the code reads
   selftest      run the test suite
+  llm-check     confirm the verification model ids against each provider's
+                models list, using the keys in .env. Free; runs no model
+  llm-backfill  run the verification models once over stored candidates
+                (--limit N, --dry-run). Costs money; stops at the daily cap
 """
 
 
@@ -39,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="dashboard only; do not call eBay")
     parser.add_argument("--pages", type=int, default=5,
                         help="seed only: pages of 200 to walk back through")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="llm-backfill only: at most this many listings")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="llm-backfill only: count, call nothing")
     args = parser.parse_args(argv)
 
     try:
@@ -83,6 +91,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "serve":
         return cmd_serve(args)
+
+    if cmd == "llm-check":
+        return cmd_llm_check()
+
+    if cmd == "llm-backfill":
+        return cmd_llm_backfill(args)
 
     parser.print_help()
     return 1
@@ -308,6 +322,83 @@ def cmd_rescore() -> int:
           f"under {C.valuation_fingerprint()}")
     for verdict, n in sorted(counts.items(), key=lambda kv: -kv[1]):
         print(f"  {verdict:<28} {n:>6}  {100 * n / max(1, total):5.1f}%")
+    return 0
+
+
+def _usd(micro: int) -> str:
+    """Micro-USD as dollars and cents, for the terminal. Formatting only."""
+    return f"${micro // 1_000_000}.{micro % 1_000_000 // 10_000:02d}"
+
+
+def cmd_llm_check() -> int:
+    """Is every configured model id one the provider lists for this key?
+
+    Listing models is free and runs nothing, so this is safe to run as often
+    as you like. It is the build-time check the build could not make: the ids
+    in config.py were confirmed from documentation, not from the API.
+    """
+    from .llm import list_models, provider_name
+
+    keys = {"anthropic": C.ANTHROPIC_API_KEY, "gemini": C.GEMINI_API_KEY}
+    wanted = [*C.LLM_SHADOW_MODELS, C.LLM_ESCALATION_MODEL]
+    listed: dict[str, tuple[list[str], str | None]] = {}
+    ok = True
+    print(f"LLM_MODE = {C.LLM_MODE}")
+    for model in wanted:
+        provider = provider_name(model)
+        if not keys[provider]:
+            print(f"  {model:<24} SKIPPED  no {provider} key in .env")
+            ok = False
+            continue
+        if provider not in listed:
+            listed[provider] = list_models(provider, keys[provider])
+        ids, error = listed[provider]
+        if error:
+            print(f"  {model:<24} ERROR    {error}")
+            ok = False
+        elif model in ids:
+            print(f"  {model:<24} ok       listed by {provider}")
+        else:
+            near = [i for i in ids if i.split("-")[:2] == model.split("-")[:2]][:6]
+            print(f"  {model:<24} MISSING  {provider} lists: {', '.join(near) or 'nothing similar'}")
+            ok = False
+    return 0 if ok else 1
+
+
+def cmd_llm_backfill(args) -> int:
+    """Shadow verification over the candidates already stored, newest first.
+
+    What `serve` in shadow mode does for new listings, done once for the
+    standing stock. Each answer is cached, so running it twice costs nothing
+    the second time; it stops quietly at the daily spend cap.
+    """
+    engine = _engine()
+    rows = engine.db.query(
+        "SELECT l.* FROM listings l JOIN verdicts v ON v.item_id = l.item_id"
+        " WHERE v.llm_candidate = 1 ORDER BY l.first_seen_utc DESC"
+    )
+    if args.limit is not None:
+        rows = rows[: args.limit]
+    models = [*C.LLM_SHADOW_MODELS, C.LLM_ESCALATION_MODEL]
+    print(f"{len(rows)} candidate listings; models {', '.join(models)}")
+    if args.dry_run:
+        return 0
+    if engine.client is None:
+        print("No eBay credentials: item details cannot be fetched.", file=sys.stderr)
+        return 1
+    from .db import listing_from_row
+
+    shadow = engine.shadow or engine.build_shadow()
+    stored = 0
+    for i, row in enumerate(rows, 1):
+        stored += len(shadow.run(listing_from_row(row), "listing"))
+        spent = engine.db.llm_spent_today()
+        print(f"  {i}/{len(rows)}  {row['item_id']}  results {stored}  spent today {_usd(spent)}")
+        if spent >= C.LLM_DAILY_SPEND_CAP_MICRO_USD:
+            print("Daily spend cap reached; run again after midnight UTC.")
+            break
+    if shadow.last_error:
+        print(f"last error: {shadow.last_error[:300]}")
     return 0
 
 

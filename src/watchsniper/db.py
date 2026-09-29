@@ -205,6 +205,10 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
+def _midnight_utc() -> datetime:
+    return utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 class Database:
     """A single connection guarded by a lock.
 
@@ -678,6 +682,113 @@ class Database:
             description_text=row["description_text"],
             image_urls=list(json.loads(row["image_urls_json"])),
             raw=json.loads(row["raw_json"]),
+        )
+
+    # -- verification model results (shadow mode) ---------------------------
+
+    def save_llm_result(
+        self,
+        *,
+        item_id: str,
+        stage: str,
+        inp,
+        result,
+        escalated_from: int | None,
+        would_verdict: str | None,
+        would_mab: int | None,
+        would_reason: str,
+    ) -> int:
+        """One attempted call, facts and all. `inp` is the LlmInput it was
+        asked about; the images themselves are not stored, only their hash."""
+        cur = self.execute(
+            "INSERT INTO llm_results (item_id,stage,provider,model,prompt_version,"
+            "candidates_json,candidate_hash,input_hash,requested_at_utc,latency_ms,"
+            "ok,error,catalogue_key,confidence,condition,box_papers,bracelet,"
+            "evidence_json,evidence_verified,red_flags_json,reason,raw_response,"
+            "input_tokens,output_tokens,cost_micro_usd,escalated_from,"
+            "would_verdict,would_mab_pence,would_reason)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                item_id, stage, result.provider, result.model, result.prompt_version,
+                json.dumps([c.__dict__ for c in inp.candidates]),
+                inp.candidate_hash, inp.input_hash, _iso(utcnow()),
+                result.latency_ms, int(result.ok), result.error,
+                result.catalogue_key, result.confidence, result.condition,
+                result.box_papers, result.bracelet, json.dumps(result.evidence),
+                int(result.evidence_verified), json.dumps(result.red_flags),
+                result.reason, result.raw_response, result.input_tokens,
+                result.output_tokens, result.cost_micro_usd, escalated_from,
+                would_verdict, would_mab, would_reason,
+            ),
+        )
+        return int(cur.lastrowid or 0)
+
+    def llm_attempts(
+        self, item_id: str, stage: str, model: str, prompt_version: str, chash: str
+    ) -> tuple[bool, int]:
+        """(an ok answer exists, failed attempts) under one cache key."""
+        row = self.one(
+            "SELECT COALESCE(SUM(ok),0) good, COALESCE(SUM(1-ok),0) bad"
+            " FROM llm_results WHERE item_id=? AND stage=? AND model=?"
+            " AND prompt_version=? AND candidate_hash=?",
+            (item_id, stage, model, prompt_version, chash),
+        )
+        return bool(row["good"]), int(row["bad"])
+
+    def llm_ok_results(
+        self, item_id: str, stage: str, prompt_version: str, chash: str
+    ) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM llm_results WHERE item_id=? AND stage=? AND ok=1"
+            " AND prompt_version=? AND candidate_hash=? ORDER BY id",
+            (item_id, stage, prompt_version, chash),
+        )
+
+    def llm_results_for(self, item_id: str) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM llm_results WHERE item_id=? ORDER BY id DESC", (item_id,)
+        )
+
+    def llm_spent_today(self) -> int:
+        """Micro-USD accounted since midnight UTC, every model."""
+        row = self.one(
+            "SELECT COALESCE(SUM(cost_micro_usd),0) s FROM llm_results"
+            " WHERE requested_at_utc >= ?",
+            (_iso(_midnight_utc()),),
+        )
+        return int(row["s"])
+
+    def llm_stats_today(self) -> list[sqlite3.Row]:
+        """Per model since midnight UTC: calls, errors, micro-USD."""
+        return self.query(
+            "SELECT model, COUNT(*) calls, SUM(1-ok) errors,"
+            " SUM(cost_micro_usd) cost FROM llm_results"
+            " WHERE requested_at_utc >= ? GROUP BY model ORDER BY model",
+            (_iso(_midnight_utc()),),
+        )
+
+    def llm_last_error(self) -> sqlite3.Row | None:
+        return self.one(
+            "SELECT model, requested_at_utc, error FROM llm_results"
+            " WHERE ok=0 ORDER BY id DESC LIMIT 1"
+        )
+
+    def llm_results_for_rescore(self) -> list[sqlite3.Row]:
+        """Every stored result with its listing, for recomputing would_*."""
+        return self.query(
+            "SELECT l.*, r.id AS llm_id, r.stage, r.ok, r.catalogue_key AS"
+            " llm_key, r.confidence, r.condition, r.evidence_verified,"
+            " r.red_flags_json FROM llm_results r"
+            " JOIN listings l ON l.item_id = r.item_id"
+        )
+
+    def update_llm_would(
+        self, result_id: int, verdict: str | None, mab: int | None, reason: str
+    ) -> None:
+        self.execute(
+            "UPDATE llm_results SET would_verdict=?, would_mab_pence=?,"
+            " would_reason=? WHERE id=?",
+            (verdict, mab, reason, result_id),
         )
 
     def all_listings(self) -> list[sqlite3.Row]:
