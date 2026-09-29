@@ -1097,8 +1097,15 @@ class TestIncrements(unittest.TestCase):
 
 
 def main() -> int:
+    import importlib
+
     loader = unittest.TestLoader()
     suite = loader.loadTestsFromModule(__import__(__name__, fromlist=["x"]))
+    # Feature suites live beside the code as test_<feature>.py, so separate
+    # pieces of work never edit the same test file.
+    for path in sorted(Path(__file__).parent.glob("test_*.py")):
+        module = importlib.import_module(f"{__package__}.{path.stem}")
+        suite.addTests(loader.loadTestsFromModule(module))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 

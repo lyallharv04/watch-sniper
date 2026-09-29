@@ -14,6 +14,13 @@ from pathlib import Path
 from . import config as C
 from .money import Pence, parse_gbp
 
+# `hard`: the listing is not the watch, or does not work.
+# `flag`: it may be the watch, but something needs a human to look.
+# Either one still rejects; severity only says how sure the rejection is.
+HARD = "hard"
+FLAG = "flag"
+SEVERITIES = (HARD, FLAG)
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -21,6 +28,7 @@ class Rule:
     pattern: re.Pattern[str]
     negations: tuple[re.Pattern[str], ...]
     notes: str
+    severity: str
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class Hit:
     rule_id: str
     matched: str
     context: str
+    severity: str
 
 
 class Blacklist:
@@ -45,6 +54,7 @@ class Blacklist:
                 pattern=re.compile(r["pattern"], flags),
                 negations=tuple(re.compile(n, flags) for n in r.get("negations", ())),
                 notes=r.get("notes", ""),
+                severity=_severity(r),
             )
             for r in raw.get("rule", [])
         ]
@@ -68,10 +78,38 @@ class Blacklist:
                 if any(n.search(window) for n in rule.negations):
                     continue
                 hits.append(
-                    Hit(rule_id=rule.id, matched=m.group(0), context=window.strip())
+                    Hit(
+                        rule_id=rule.id,
+                        matched=m.group(0),
+                        context=window.strip(),
+                        severity=rule.severity,
+                    )
                 )
                 break
         return hits
+
+
+def _severity(raw: dict) -> str:
+    """A rule that omits its severity is hard: an unmarked rule fails safe.
+
+    A misspelt one is a load error rather than a silent default, because
+    "flg" quietly meaning "hard" is exactly the kind of drift nobody notices.
+    """
+    severity = raw.get("severity", HARD)
+    if severity not in SEVERITIES:
+        raise ValueError(
+            f"blacklist rule {raw.get('id')!r}: severity {severity!r} "
+            f"is not one of {SEVERITIES}"
+        )
+    return severity
+
+
+def hard_hits(hits: list[Hit]) -> list[Hit]:
+    return [h for h in hits if h.severity == HARD]
+
+
+def flag_hits(hits: list[Hit]) -> list[Hit]:
+    return [h for h in hits if h.severity == FLAG]
 
 
 # --------------------------------------------------------------------------

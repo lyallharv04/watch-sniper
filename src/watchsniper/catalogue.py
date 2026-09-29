@@ -63,12 +63,69 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9.]+", " ", text.lower())).strip()
 
 
+# Words that say nothing about which reference a listing is. A model string
+# like "PRX (movement not stated)" is prose, and its prose words must not
+# score at all.
+_FILLER = frozenset({
+    "the", "and", "with", "for", "not", "non", "stated", "variant", "movement",
+    "modern", "line",
+})
+# Words that score but never qualify, whatever field they came from.
+_WEAK = frozenset({
+    "watch", "watches", "mens", "men", "gents", "ladies", "automatic", "auto",
+    "jdm", "diver", "steel",
+})
+_MM = re.compile(r"(?<![a-z0-9.])\d+(?:\.\d+)? ?mm(?![a-z0-9])")
+_SIZE = re.compile(r"^(\d{1,2}|\d+(\.\d+)? ?mm)$")  # "80", "38", "40mm", "35 mm"
+
+
+def _has(hay: str, phrase: str) -> bool:
+    """Whole-word containment on normalised text.
+
+    Unlike `match`, which uses bare substrings, this refuses "integra" inside
+    "integrated": candidates are scored on many short model words, and a
+    substring rule would let every one of them misfire.
+    """
+    return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", hay) is not None
+
+
+def _tokens(ref: Reference) -> tuple[frozenset[str], frozenset[str]]:
+    """A reference's distinctive tokens, split into (strong, weak).
+
+    Strong tokens identify the entry: its aliases, its key (unless synthetic —
+    an invented key is never written in a title) and model-number words such
+    as "c60" or "556". Weak tokens only separate siblings: `requires_any`
+    qualifiers ("quartz", "titanium"), descriptive model words ("mechanical",
+    "field"), sizes and short numbers. The brand's own words are removed from
+    each, so "farer lander" contributes "lander" and a `requires_any` of
+    "seiko" contributes nothing.
+    """
+    brand = set(_norm(ref.brand).split())
+    ids = list(ref.aliases) + ([] if ref.synthetic_key else [_norm(ref.key)])
+    words = _norm(ref.model).split()
+    tagged = [(p, True) for p in ids] + [(p, False) for p in ref.requires_any]
+    tagged += [(w, any(ch.isdigit() for ch in w)) for w in words]
+    strong: set[str] = set()
+    weak: set[str] = set()
+    for phrase, identifies in tagged:
+        kept = [w for w in phrase.split() if w not in brand]
+        tok = " ".join(kept)
+        if not tok or tok in _FILLER or (len(tok) < 3 and not tok.isdigit()):
+            continue
+        if identifies and tok not in _WEAK and not _SIZE.match(tok):
+            strong.add(tok)
+        else:
+            weak.add(tok)
+    return frozenset(strong), frozenset(weak - strong)
+
+
 class Catalogue:
     def __init__(self, references: list[Reference], as_of: str = "", source: str = ""):
         self.references = references
         self.as_of = as_of
         self.source = source
         self.by_key = {r.key: r for r in references}
+        self._tokens = {r.key: _tokens(r) for r in references}
 
     @classmethod
     def load(cls, path: Path | None = None) -> Catalogue:
@@ -155,6 +212,57 @@ class Catalogue:
             evidence=top[3],
             ambiguous_with=[s[1].key for s in tied[1:]],
         )
+
+    def candidates(self, title: str, n: int = 3) -> list[Reference]:
+        """The up-to-n references a title is closest to, for a model to choose from.
+
+        The rules match, if any, comes first. The rest are entries of a brand
+        named in the title (or of the matched entry's brand), scored by how
+        many of their distinctive tokens occur in it. `excludes` and
+        `requires_any` do not disqualify: the point is to offer the siblings
+        the rules ruled out — the Quartz when the title says Powermatic, and
+        the reverse.
+
+        Tokens are strong or weak (see `_tokens`). Every token that occurs
+        scores one, but an entry is offered only if at least one strong token
+        occurs: aliases and model numbers say which family a listing is,
+        while qualifiers, sizes and descriptive words ("quartz", "40mm",
+        "mechanical") only say which sibling. So "Hamilton Jazzmaster Quartz"
+        offers nothing, and "Tissot PRX 40mm" offers the 40mm Powermatic and
+        Quartz ahead of the other PRX entries. A family alias shared by every
+        entry of a brand, such as "prx", is strong on purpose: it is how a
+        title names the family, and the model is there to pick the variant.
+
+        An entry whose case size contradicts the one the title states sorts
+        after every entry that does not, so "PRX Powermatic 80 40mm" offers
+        the 40mm Quartz before the 35mm Powermatic. Ties go to catalogue
+        order. Pure; no I/O.
+        """
+        hay = _norm(title)
+        m = self.match(title)
+        brands = {r.brand for r in self.references if _has(hay, _norm(r.brand))}
+        if m is not None:
+            brands.add(m.reference.brand)
+        if not brands:
+            return []
+
+        stated = {x.replace(" ", "") for x in _MM.findall(hay)}
+        out: list[Reference] = [m.reference] if m is not None else []
+        scored: list[tuple[bool, int, int, Reference]] = []
+        for i, ref in enumerate(self.references):
+            if ref.brand not in brands or (out and ref.key == out[0].key):
+                continue
+            strong, weak = self._tokens[ref.key]
+            hits = sum(1 for t in strong if _has(hay, t))
+            if not hits:
+                continue
+            hits += sum(1 for t in weak if _has(hay, t))
+            sizes = {t.replace(" ", "") for t in weak if t.endswith("mm")}
+            clash = bool(stated and sizes and not stated & sizes)
+            scored.append((clash, -hits, i, ref))
+        scored.sort(key=lambda t: t[:3])
+        out += [t[3] for t in scored]
+        return out[:n]
 
     def missing_worklist(
         self, titles: list[str], limit: int = 40

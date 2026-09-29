@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .details import ItemDetails
 from .models import Listing, parse_ts, utcnow
 from .valuation import Assessment
 
@@ -67,7 +68,8 @@ CREATE TABLE IF NOT EXISTS verdicts (
     headroom_pence      INTEGER,
     below_fmv_bp        INTEGER,
     derivation_json     TEXT NOT NULL,
-    config_fingerprint  TEXT NOT NULL
+    config_fingerprint  TEXT NOT NULL,
+    llm_candidate       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_verdicts_verdict ON verdicts(verdict);
 
@@ -104,6 +106,67 @@ CREATE TABLE IF NOT EXISTS closings (
     detail            TEXT NOT NULL DEFAULT '',
     sold              INTEGER
 );
+
+-- The full item as getItem returns it, for the verification models. Written
+-- on first need and at close. Seller-supplied text is stored as received and
+-- only ever reaches a model as tagged data (docs/LLM_CONTRACT.md).
+CREATE TABLE IF NOT EXISTS item_details (
+    item_id           TEXT PRIMARY KEY REFERENCES listings(item_id),
+    fetched_at_utc    TEXT NOT NULL,
+    aspects_json      TEXT NOT NULL,
+    description_text  TEXT NOT NULL,
+    image_urls_json   TEXT NOT NULL,
+    raw_json          TEXT NOT NULL
+);
+
+-- One row per model call attempted. Facts only: no money column is a model's
+-- output. The would_* columns are what live mode would have decided, computed
+-- by code from the stored facts and recomputed by rescore without a call.
+CREATE TABLE IF NOT EXISTS llm_results (
+    id                INTEGER PRIMARY KEY,
+    item_id           TEXT NOT NULL REFERENCES listings(item_id),
+    stage             TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    prompt_version    TEXT NOT NULL,
+    candidates_json   TEXT NOT NULL,
+    candidate_hash    TEXT NOT NULL,
+    input_hash        TEXT NOT NULL,
+    requested_at_utc  TEXT NOT NULL,
+    latency_ms        INTEGER NOT NULL DEFAULT 0,
+    ok                INTEGER NOT NULL,
+    error             TEXT,
+    catalogue_key     TEXT,
+    confidence        TEXT,
+    condition         TEXT,
+    box_papers        TEXT,
+    bracelet          TEXT,
+    evidence_json     TEXT NOT NULL DEFAULT '[]',
+    evidence_verified INTEGER NOT NULL DEFAULT 0,
+    red_flags_json    TEXT NOT NULL DEFAULT '[]',
+    reason            TEXT NOT NULL DEFAULT '',
+    raw_response      TEXT NOT NULL DEFAULT '',
+    input_tokens      INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL DEFAULT 0,
+    cost_micro_usd    INTEGER NOT NULL DEFAULT 0,
+    escalated_from    INTEGER REFERENCES llm_results(id),
+    would_verdict     TEXT,
+    would_mab_pence   INTEGER,
+    would_reason      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_llm_key
+    ON llm_results(item_id, stage, model, prompt_version, candidate_hash);
+CREATE INDEX IF NOT EXISTS ix_llm_requested ON llm_results(requested_at_utc);
+
+CREATE TABLE IF NOT EXISTS llm_labels (
+    id              INTEGER PRIMARY KEY,
+    llm_result_id   INTEGER NOT NULL REFERENCES llm_results(id),
+    item_id         TEXT NOT NULL,
+    correct         INTEGER NOT NULL,
+    note            TEXT NOT NULL DEFAULT '',
+    created_at_utc  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_llm_labels_result ON llm_labels(llm_result_id);
 
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY,
@@ -142,6 +205,10 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
+def _midnight_utc() -> datetime:
+    return utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 class Database:
     """A single connection guarded by a lock.
 
@@ -163,7 +230,7 @@ class Database:
                 r["name"]
                 for r in self._conn.execute("PRAGMA table_info(verdicts)")
             }
-            if cols and "below_fmv_bp" not in cols:
+            if cols and "llm_candidate" not in cols:
                 self._conn.execute("DROP TABLE verdicts")
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
@@ -257,8 +324,8 @@ class Database:
                 caveats_json, scope, bracelet, catalogue_key, catalogue_display,
                 fmv_verified, fmv_pence, eff_fmv_pence, mab_pence, price_pence,
                 price_basis, headroom_pence, below_fmv_bp, derivation_json,
-                config_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                config_fingerprint, llm_candidate
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(item_id) DO UPDATE SET
                 computed_at_utc=excluded.computed_at_utc,
                 verdict=excluded.verdict,
@@ -278,7 +345,8 @@ class Database:
                 headroom_pence=excluded.headroom_pence,
                 below_fmv_bp=excluded.below_fmv_bp,
                 derivation_json=excluded.derivation_json,
-                config_fingerprint=excluded.config_fingerprint
+                config_fingerprint=excluded.config_fingerprint,
+                llm_candidate=excluded.llm_candidate
             """,
             (
                 a.listing.item_id,
@@ -301,6 +369,7 @@ class Database:
                 a.below_fmv_bp,
                 json.dumps(_valuation_json(v)),
                 a.config_fingerprint,
+                int(a.llm_candidate),
             ),
         )
 
@@ -582,6 +651,186 @@ class Database:
                 item_id, _iso(utcnow()), final_price, bid_count,
                 int(bid_count > 0), None if sold is None else int(sold), detail,
             ),
+        )
+
+    # -- item details (getItem, for the verification models) ----------------
+
+    def save_item_details(self, d: ItemDetails) -> None:
+        """Insert or replace. The listing must already be stored (FK)."""
+        self.execute(
+            "INSERT OR REPLACE INTO item_details (item_id,fetched_at_utc,"
+            "aspects_json,description_text,image_urls_json,raw_json)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                d.item_id,
+                _iso(d.fetched_at),
+                json.dumps([[n, v] for n, v in d.aspects]),
+                d.description_text,
+                json.dumps(list(d.image_urls)),
+                json.dumps(d.raw, default=str),
+            ),
+        )
+
+    def item_details(self, item_id: str) -> ItemDetails | None:
+        row = self.one("SELECT * FROM item_details WHERE item_id=?", (item_id,))
+        if row is None:
+            return None
+        return ItemDetails(
+            item_id=row["item_id"],
+            fetched_at=parse_ts(row["fetched_at_utc"]) or utcnow(),
+            aspects=[(str(n), str(v)) for n, v in json.loads(row["aspects_json"])],
+            description_text=row["description_text"],
+            image_urls=list(json.loads(row["image_urls_json"])),
+            raw=json.loads(row["raw_json"]),
+        )
+
+    # -- verification model results (shadow mode) ---------------------------
+
+    def save_llm_result(
+        self,
+        *,
+        item_id: str,
+        stage: str,
+        inp,
+        result,
+        escalated_from: int | None,
+        would_verdict: str | None,
+        would_mab: int | None,
+        would_reason: str,
+    ) -> int:
+        """One attempted call, facts and all. `inp` is the LlmInput it was
+        asked about; the images themselves are not stored, only their hash."""
+        cur = self.execute(
+            "INSERT INTO llm_results (item_id,stage,provider,model,prompt_version,"
+            "candidates_json,candidate_hash,input_hash,requested_at_utc,latency_ms,"
+            "ok,error,catalogue_key,confidence,condition,box_papers,bracelet,"
+            "evidence_json,evidence_verified,red_flags_json,reason,raw_response,"
+            "input_tokens,output_tokens,cost_micro_usd,escalated_from,"
+            "would_verdict,would_mab_pence,would_reason)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                item_id, stage, result.provider, result.model, result.prompt_version,
+                json.dumps([c.__dict__ for c in inp.candidates]),
+                inp.candidate_hash, inp.input_hash, _iso(utcnow()),
+                result.latency_ms, int(result.ok), result.error,
+                result.catalogue_key, result.confidence, result.condition,
+                result.box_papers, result.bracelet, json.dumps(result.evidence),
+                int(result.evidence_verified), json.dumps(result.red_flags),
+                result.reason, result.raw_response, result.input_tokens,
+                result.output_tokens, result.cost_micro_usd, escalated_from,
+                would_verdict, would_mab, would_reason,
+            ),
+        )
+        return int(cur.lastrowid or 0)
+
+    def llm_attempts(
+        self, item_id: str, stage: str, model: str, prompt_version: str, chash: str
+    ) -> tuple[bool, int]:
+        """(an ok answer exists, failed attempts) under one cache key."""
+        row = self.one(
+            "SELECT COALESCE(SUM(ok),0) good, COALESCE(SUM(1-ok),0) bad"
+            " FROM llm_results WHERE item_id=? AND stage=? AND model=?"
+            " AND prompt_version=? AND candidate_hash=?",
+            (item_id, stage, model, prompt_version, chash),
+        )
+        return bool(row["good"]), int(row["bad"])
+
+    def llm_ok_results(
+        self, item_id: str, stage: str, prompt_version: str, chash: str
+    ) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM llm_results WHERE item_id=? AND stage=? AND ok=1"
+            " AND prompt_version=? AND candidate_hash=? ORDER BY id",
+            (item_id, stage, prompt_version, chash),
+        )
+
+    def llm_results_for(self, item_id: str) -> list[sqlite3.Row]:
+        return self.query(
+            "SELECT * FROM llm_results WHERE item_id=? ORDER BY id DESC", (item_id,)
+        )
+
+    def llm_spent_today(self) -> int:
+        """Micro-USD accounted since midnight UTC, every model."""
+        row = self.one(
+            "SELECT COALESCE(SUM(cost_micro_usd),0) s FROM llm_results"
+            " WHERE requested_at_utc >= ?",
+            (_iso(_midnight_utc()),),
+        )
+        return int(row["s"])
+
+    def llm_stats_today(self) -> list[sqlite3.Row]:
+        """Per model since midnight UTC: calls, errors, micro-USD."""
+        return self.query(
+            "SELECT model, COUNT(*) calls, SUM(1-ok) errors,"
+            " SUM(cost_micro_usd) cost FROM llm_results"
+            " WHERE requested_at_utc >= ? GROUP BY model ORDER BY model",
+            (_iso(_midnight_utc()),),
+        )
+
+    def llm_last_error(self) -> sqlite3.Row | None:
+        return self.one(
+            "SELECT model, requested_at_utc, error FROM llm_results"
+            " WHERE ok=0 ORDER BY id DESC LIMIT 1"
+        )
+
+    def llm_results_for_rescore(self) -> list[sqlite3.Row]:
+        """Every stored result with its listing, for recomputing would_*."""
+        return self.query(
+            "SELECT l.*, r.id AS llm_id, r.stage, r.ok, r.catalogue_key AS"
+            " llm_key, r.confidence, r.condition, r.evidence_verified,"
+            " r.red_flags_json FROM llm_results r"
+            " JOIN listings l ON l.item_id = r.item_id"
+        )
+
+    def add_llm_label(self, result_id: int, correct: bool, note: str = "") -> None:
+        """Right or wrong, on one model result. The latest label counts."""
+        row = self.one("SELECT item_id FROM llm_results WHERE id=?", (result_id,))
+        if row is None:
+            return
+        self.execute(
+            "INSERT INTO llm_labels (llm_result_id,item_id,correct,note,created_at_utc)"
+            " VALUES (?,?,?,?,?)",
+            (result_id, row["item_id"], int(correct), note, _iso(utcnow())),
+        )
+        self.audit("operator", f"llm_label:{'right' if correct else 'wrong'}", str(result_id))
+
+    def llm_label_state(self, item_id: str) -> dict[int, bool]:
+        """The latest right/wrong label per result of one item."""
+        return {
+            r["llm_result_id"]: bool(r["correct"])
+            for r in self.query(
+                "SELECT llm_result_id, correct FROM llm_labels WHERE id IN"
+                " (SELECT MAX(id) FROM llm_labels WHERE item_id=? GROUP BY llm_result_id)",
+                (item_id,),
+            )
+        }
+
+    def llm_label_tally(self) -> list[sqlite3.Row]:
+        """Per model, counting each result's latest label once: right, wrong."""
+        return self.query(
+            "SELECT r.model, SUM(l.correct) right_n, SUM(1-l.correct) wrong_n"
+            " FROM llm_labels l JOIN llm_results r ON r.id = l.llm_result_id"
+            " WHERE l.id IN (SELECT MAX(id) FROM llm_labels GROUP BY llm_result_id)"
+            " GROUP BY r.model ORDER BY r.model"
+        )
+
+    def llm_review_sample(self, limit: int = 20) -> list[sqlite3.Row]:
+        """A fresh random sample of results live mode would have rejected,
+        so the models' false negatives get labelled as well as their passes."""
+        return self.query(
+            "SELECT r.*, l.title FROM llm_results r"
+            " JOIN listings l ON l.item_id = r.item_id"
+            " WHERE r.would_verdict = 'REJECT_LLM' ORDER BY random() LIMIT ?",
+            (limit,),
+        )
+
+    def update_llm_would(
+        self, result_id: int, verdict: str | None, mab: int | None, reason: str
+    ) -> None:
+        self.execute(
+            "UPDATE llm_results SET would_verdict=?, would_mab_pence=?,"
+            " would_reason=? WHERE id=?",
+            (verdict, mab, reason, result_id),
         )
 
     def all_listings(self) -> list[sqlite3.Row]:

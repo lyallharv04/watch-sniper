@@ -172,6 +172,38 @@ PUBLIC_BASE_URL = (
     or f"http://localhost:{BIND_PORT}"
 ).rstrip("/")
 
+# --- LLM verification (shadow mode; DECISIONS.md A19) ---------------------
+
+LLM_MODE = (
+    env(
+        "LLM_MODE",
+        "off",
+        "'off' or 'shadow'. Shadow runs the verification models on each "
+        "candidate listing and each catalogue-matched auction at close, stores "
+        "what they said and shows it on the item page. It changes no verdict "
+        "and sends no alert. Live mode is not built.",
+        "Defaults to off: no LLM call is made and nothing about the service "
+        "changes.",
+    )
+    or "off"
+).strip().lower()
+ANTHROPIC_API_KEY = env(
+    "ANTHROPIC_API_KEY",
+    None,
+    "console.anthropic.com -> Settings -> API keys. Create a key used only by "
+    "this service, in a workspace with its own spend limit.",
+    "Claude models are skipped. Shadow mode still runs any other model it has "
+    "a key for; with no key at all it is rules-only, exactly as with LLM_MODE "
+    "off.",
+)
+GEMINI_API_KEY = env(
+    "GEMINI_API_KEY",
+    None,
+    "aistudio.google.com -> Get API key. A key used only by this service, on "
+    "a billing-enabled project (the free tier may use prompts for training).",
+    "Gemini models are skipped; see ANTHROPIC_API_KEY for what remains.",
+)
+
 POLL_BIN_SECONDS = env_int(
     "POLL_BIN_SECONDS",
     90,
@@ -298,6 +330,52 @@ MIN_SELLER_FEEDBACK_PCT_X100 = 9500  # 95.00%
 MIN_SELLER_FEEDBACK_SCORE = 15
 
 # --------------------------------------------------------------------------
+# LLM verification — shadow mode (DECISIONS.md A19, docs/LLM_CONTRACT.md)
+#
+# The models supply facts about a listing; they never supply money. Every
+# figure here is either a limit or a price used to account for spend.
+# --------------------------------------------------------------------------
+
+# A listing goes to the models when its price is within this margin above the
+# highest maximum bid among its catalogue candidates. The margin only admits a
+# listing to verification; it never lets a price over the maximum bid alert.
+CANDIDATE_MARGIN_BP = 1500
+LLM_CANDIDATES = 3
+
+# Run on every candidate in shadow mode, so their answers can be compared.
+LLM_SHADOW_MODELS = ("claude-haiku-4-5", "gemini-3.8-flash")
+# Run once more when a shadow model answers below `high` confidence.
+LLM_ESCALATION_MODEL = "claude-sonnet-5-5"
+
+# Price per million tokens, integer micro-USD: (input, output), output
+# including any thinking. Spend is accounted from each response's reported
+# token usage and rounds up. Confirmed 2026-09-29 from the providers' pricing
+# pages; Google's rate for the Flash model is scheduled to double on
+# 2027-01-01, so it is in UNVERIFIED below.
+LLM_PRICE_MICRO_USD_PER_MTOK: dict[str, tuple[int, int]] = {
+    "claude-haiku-4-5": (1_000_000, 5_000_000),
+    "gemini-3.8-flash": (750_000, 3_750_000),
+    "claude-sonnet-5-5": (2_000_000, 10_000_000),
+}
+# Across all models, per UTC day. When reached, calls stop until midnight UTC
+# and the service is rules-only. A fuse against a bug, not a budget.
+LLM_DAILY_SPEND_CAP_MICRO_USD = 2_000_000
+
+LLM_MAX_IMAGES = 3
+# eBay serves each picture at several sizes; this is the longest edge asked for.
+LLM_IMAGE_EDGE_PX = 960
+LLM_IMAGE_MAX_BYTES = 1_500_000
+# Seller description, HTML stripped, cut to this many characters.
+LLM_DESCRIPTION_CHARS = 6000
+LLM_MAX_OUTPUT_TOKENS = 1024
+# For a model that thinks before answering (the escalation model, and the
+# Gemini Flash run at its lowest thinking level): room for both.
+LLM_THINKING_MAX_OUTPUT_TOKENS = 8192
+LLM_TIMEOUT_SECONDS = 45
+# Failed calls for one item, stage and model before it stops being retried.
+LLM_MAX_ATTEMPTS = 3
+
+# --------------------------------------------------------------------------
 # Unverified constants (requirement 19)
 # --------------------------------------------------------------------------
 
@@ -320,6 +398,9 @@ UNVERIFIED: dict[str, str] = {
     "OUTBOUND_POSTAGE": "Your own postage receipts.",
     "EBAY_CATEGORY_IDS": "`python -m watchsniper diagnose` — it reports "
     "whether the category resolves on EBAY_GB.",
+    "LLM_PRICE_MICRO_USD_PER_MTOK": "The providers' pricing pages. Spend "
+    "accounting only; it moves no valuation. Google's published rate for "
+    "gemini-3.8-flash rises on 2027-01-01.",
 }
 
 # Caveat codes attached to every valuation. Ordered by how much they move the

@@ -50,8 +50,12 @@ One Python process. Three threads and an HTTP server.
    │   every gate evaluated, all results kept                     │
    │   one valuation: FMV point × condition                       │
    │   fees.max_allowable_bid — solved                            │
+   │   llm_candidate — would a closest candidate clear it?        │
    └───────────────────────────┬──────────────────────────────────┘
-                               ▼
+                               │  LLM_MODE=shadow only (§6a)
+                               ├──► shadow.Shadow → getItem, images →
+                               │    llm (urllib) → Anthropic / Gemini
+                               ▼    facts stored, no verdict changed
               SQLite  ─────────┬─────────────────►  notify → ntfy → phone
                                ▼
                    web  server-rendered HTML, no arithmetic, installable
@@ -61,7 +65,8 @@ One Python process. Three threads and an HTTP server.
 ```
 
 Nothing else in the process. There is no message broker, no cache, no migration
-tool and no frontend build. Outside it, on the same host, `cloudflared` runs as
+tool and no frontend build. In shadow mode the sweep threads also make the
+verification model calls inline, with a timeout; there is no fourth thread. Outside it, on the same host, `cloudflared` runs as
 its own service and Cloudflare Access does the authentication (§7, and
 `docs/DEPLOY.md`).
 
@@ -83,7 +88,10 @@ Scope of delivery and bracelet type are still read from the title, stored and
 shown as tags on the dashboard. They are labels only and do not move the
 number.
 
-The verdict is `DEAL` or `REJECT_<gate>`. Uncertainty is shown as caveats rather
+The verdict is `DEAL` or `REJECT_<gate>`. Live mode (§6a, not built) adds
+`CHECK` — worth a human look, never alerted — and `REJECT_LLM`; shadow mode
+computes them only as what live mode *would* have said, on the model result,
+and never writes them to the verdict. Uncertainty is shown as caveats rather
 than as a band: `FMV_UNVERIFIED`, `VARIANT_UNRESOLVED` (a banded entry valued at
 its midpoint), `AMBIGUOUS_MATCH`, `POSTAGE_UNKNOWN`, and an assumed condition.
 
@@ -183,6 +191,13 @@ separately, on eBay's condition string.
 labelled in the dashboard — a hand-authored corpus measures the author's
 imagination, a labelled one measures the system.
 
+Each rule has a `severity`. **Hard** rules say the listing is not a working
+watch — parts, spares or repair, not running, broken, an accessory. **Flag**
+rules say it may be the watch but needs a human — replica, homage, a
+refinished or custom dial. Today either rejects on `BLACKLIST`. For the
+verification models a hard hit means the listing is never sent, and a flag
+caps what live mode would say at `CHECK`.
+
 ---
 
 ## 6. External API
@@ -225,6 +240,49 @@ not obtainable. Marketplace Insights is closed to new applicants.
 
 ---
 
+## 6a. Verification models — shadow mode
+
+Why, and what must be true before a model may change a verdict:
+[DECISIONS.md A19](DECISIONS.md). The interface: `docs/LLM_CONTRACT.md`.
+
+`LLM_MODE` is `off` by default. Set to `shadow`, the models run on:
+
+- every **candidate** — seller gate passed, no hard blacklist hit, and a price
+  within `CANDIDATE_MARGIN_BP` of the highest maximum bid among its
+  `LLM_CANDIDATES` closest catalogue references (`Catalogue.candidates`);
+- every catalogue-matched **auction at close**, from the getItem the closing
+  check already makes.
+
+Each gets one call per model in `LLM_SHADOW_MODELS`, and one to
+`LLM_ESCALATION_MODEL` if any answer is below `high` confidence. The input is
+the title, the condition string, the item specifics, the description with its
+HTML stripped and cut to `LLM_DESCRIPTION_CHARS`, up to `LLM_MAX_IMAGES`
+pictures downloaded and base64-encoded by this process, and the candidates
+with their notes. **No price and no FMV is ever shown to a model.**
+
+Seller-supplied text goes in as data, inside tags carrying a random id made
+per call; the system prompt says it was written by the seller and must never
+be followed. The answer is JSON only: `catalogue_key` (one of the candidates,
+or null), `confidence` (`high` / `medium` / `low`), `condition`, `box_papers`,
+`bracelet`, quoted `evidence`, `red_flags`, `reason`. Code checks the quoted
+evidence is really in the input.
+
+Everything is stored in `llm_results` with the raw response, model, prompt
+version and token cost, keyed on item, stage, model, prompt version and a hash
+of the candidate set, so an answer is never bought twice and a catalogue edit
+that changes the candidates makes it visibly stale. From the stored facts, code
+computes what live mode *would* have said: the named reference valued at the
+**lower** of the stated and the model's condition, then `REJECT_LLM`, `CHECK`
+or `DEAL` — `DEAL` only with `high` confidence, verified evidence, no red flag
+and no blacklist flag. `rescore` recomputes that and never calls a model.
+
+Calls go over stdlib urllib to fixed endpoints. Spend is integer micro-USD,
+capped per UTC day at `LLM_DAILY_SPEND_CAP_MICRO_USD`; at the cap, with no key,
+or on any error the service is rules-only and says so on Health. Nothing a
+model returns reaches a verdict, an alert or the Observed column.
+
+---
+
 ## 7. Safety boundary
 
 Requirement 8 is enforced three ways, deliberately of different kinds:
@@ -237,6 +295,10 @@ Requirement 8 is enforced three ways, deliberately of different kinds:
 
 The first two protect against the environment. Only the third protects against a
 future edit, and that is the one that matters in six months.
+
+`ANTHROPIC_API_KEY` and `GEMINI_API_KEY` live in `.env` only. They are sent in
+the providers' auth headers and never logged, stored or shown. Neither gives
+the process any capability on eBay.
 
 The dashboard itself has no authentication. It binds to loopback — the systemd
 unit sets `BIND_HOST` in the environment, which overrides `.env` — and is
@@ -271,7 +333,8 @@ so the web layer still does no arithmetic):
 - **All** — `/?verdict=all`, every listing in either format.
 
 The first two hide unmatched listings and `REJECT_BLACKLIST`; choosing a
-verdict filters within the view. Filters and the recent verdict tally fold away.
+verdict filters within the view — `CHECK` and `REJECT_LLM` included, for live
+mode. Filters and the recent verdict tally fold away.
 
 Each listing is a **card**: verdict and % below FMV first, then the title and
 reference, a fixed strip of price, max bid and headroom (sage when under the
@@ -280,7 +343,13 @@ buttons. Auction cards add end time and bid count. A label tap returns to the
 page it came from; the form carries that path, honoured only if it is local,
 because the page sends no Referer. The item page leads with the same three
 figures and FMV, then Open on eBay, then the evidence as cards — listing,
-seller, reference, gates, the valuation ledger, labels. The Catalogue is a card
+seller, reference, gates, the valuation ledger, labels — and, in shadow mode,
+one card per model result: identification, confidence, evidence with a
+verified mark, red flags, what live mode would have said, cost, the raw
+response folded away, and **Right** / **Wrong** buttons stored in
+`llm_labels`. A review page samples results live mode would have rejected, so
+false negatives are labelled too. Health shows the mode, spend today against
+the cap, and calls and errors by model. The Catalogue is a card
 per reference on a phone and the full table on a wide screen; the other pages
 are cards throughout.
 
