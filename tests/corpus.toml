@@ -4,6 +4,8 @@
 #  `drop = true`  means the blacklist SHOULD fire on this title.
 #  `drop = false` means it must NOT — these are the false positives, and they
 #  are the reason the matcher is negation-aware at all.
+#  `severity` on a drop case is the strongest severity among the rules it
+#  fires — "hard" beats "flag". Both still reject.
 #
 #  The entries below the marker are seeds carried over from the previous
 #  attempt: real titles, or minimal reproductions of real failures. Everything
@@ -21,6 +23,7 @@ why = "THE critical false positive. Boilerplate on most vintage listings."
 [[case]]
 title = "Vintage Seiko - untested, sold as seen"
 drop = true
+severity = "flag"
 why = "Bare untested means the movement."
 
 [[case]]
@@ -31,16 +34,19 @@ why = "'not a replica' contains 'replica'."
 [[case]]
 title = "Tissot PRX replica dial fitted, runs well"
 drop = true
+severity = "flag"
 why = ""
 
 [[case]]
 title = "Christopher Ward C60 Trident Pro 600 homage by Pagani"
 drop = true
+severity = "flag"
 why = ""
 
 [[case]]
 title = "Christopher Ward BX149 C60 Trident Pro 600 42mm Bader bracelet- used"
 drop = true
+severity = "hard"
 why = "A bracelet sold alone. It was every single alert in the first pre-flight run, priced as a GBP 500 watch."
 
 [[case]]
@@ -51,16 +57,19 @@ why = "A genuine watch that merely mentions its bracelet."
 [[case]]
 title = "Steel bracelet for Tissot PRX 40mm, 12mm lug"
 drop = true
+severity = "hard"
 why = ""
 
 [[case]]
 title = "Hamilton Khaki Field - strap only, no watch"
 drop = true
+severity = "hard"
 why = ""
 
 [[case]]
 title = "Seiko Alpinist SPB121 - dial has been refinished"
 drop = true
+severity = "flag"
 why = "Word order the corpus caught being missed."
 
 [[case]]
@@ -76,6 +85,7 @@ why = "A broken clasp is a service item, not a reject."
 [[case]]
 title = "Baltic Aquascaphe - broken, does not run"
 drop = true
+severity = "hard"
 why = ""
 
 [[case]]
@@ -86,11 +96,13 @@ why = "The literal reading is the opposite of the meaning."
 [[case]]
 title = "Sinn 556 I spares or repairs"
 drop = true
+severity = "hard"
 why = ""
 
 [[case]]
 title = "Vintage Seiko 6309 Mumbai Special orange dial"
 drop = true
+severity = "flag"
 why = ""
 
 [[case]]
@@ -101,6 +113,7 @@ why = "An aftermarket STRAP is priced through BRACELET_MULT, not rejected. Only 
 [[case]]
 title = "Tissot PRX with aftermarket dial"
 drop = true
+severity = "flag"
 why = ""
 
 # --- from live traffic, 2026-09-04 --------------------------------------
@@ -108,6 +121,7 @@ why = ""
 [[case]]
 title = "Tissot Prx Powermatic 80 Custom Tiffany Dial-Unique Piece- NO RESERVE"
 drop = true
+severity = "flag"
 why = "Surfaced as actionable on the first live run. A custom dial is a different object, not a discounted PRX."
 
 [[case]]
