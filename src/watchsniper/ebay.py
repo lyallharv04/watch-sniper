@@ -64,6 +64,10 @@ class CallBudget:
     ceiling: int
     used: int = 0
     day: str = ""
+    #: Every call since start-up, never reset. What a sweep counts its calls
+    #: from: `used` drops to zero at midnight UTC, so a sweep spanning midnight
+    #: measured by `used` would record a negative number of calls.
+    total: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def take(self, day: str) -> None:
@@ -75,6 +79,7 @@ class CallBudget:
                     f"daily Browse call ceiling reached ({self.ceiling})"
                 )
             self.used += 1
+            self.total += 1
 
     @property
     def remaining(self) -> int:

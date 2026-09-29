@@ -687,6 +687,7 @@ class TestAlerting(unittest.TestCase):
 
 class _FakeBudget:
     used = 0
+    total = 0
 
 
 class _FakeClient:
@@ -699,6 +700,7 @@ class _FakeClient:
 
     def search(self, *, offset: int, limit: int, **_kw) -> dict:
         self.budget.used += 1
+        self.budget.total += 1
         self.offsets.append(offset)
         rows = [
             {
@@ -723,6 +725,7 @@ class _FakeItemClient:
 
     def get_item(self, item_id: str, *, day: str) -> dict:
         self.budget.used += 1
+        self.budget.total += 1
         self.fetched.append(item_id)
         value = self.items[item_id]
         if isinstance(value, Exception):

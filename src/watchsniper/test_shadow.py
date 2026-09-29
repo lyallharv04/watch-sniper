@@ -238,6 +238,7 @@ class TestNothingChanges(ShadowCase):
         class Search:
             class budget:
                 used = 0
+                total = 0
                 remaining = 100
                 ceiling = 100
 

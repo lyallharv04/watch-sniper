@@ -123,7 +123,7 @@ class Engine:
         assert self.client is not None, "no eBay client configured"
         result = PollResult(kind=kind)
         run_id = self.db.start_poll(kind)
-        before = self.client.budget.used
+        before = self.client.budget.total
         sweep_started = utcnow()
         horizon = sweep_started + C.AUCTION_HORIZON
         try:
@@ -187,7 +187,7 @@ class Engine:
             result.error = traceback.format_exc(limit=3)
             self.last_error = result.error
 
-        result.http_calls = self.client.budget.used - before
+        result.http_calls = self.client.budget.total - before
         self.db.finish_poll(
             run_id,
             http_calls=result.http_calls,
