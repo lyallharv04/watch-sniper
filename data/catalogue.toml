@@ -67,7 +67,8 @@ priority = 10
 aliases = ["prx"]
 requires_any = ["powermatic", "automatic", "t137.407", "t137407"]
 excludes = ["quartz", "35mm", "35 mm", "titanium", "chronograph", "digital",
-            "t137.410", "t137410", "t137.210", "t137210", "t137.207", "t137207"]
+            "t137.410", "t137410", "t137.210", "t137210", "t137.207", "t137207",
+            "p475", "p480"]
 notes = "Waffle dial. The single highest confusion risk in the catalogue: the quartz is a sunburst dial at less than half the money, so a title stating neither movement must NOT land here — it falls to PRX-UNSPECIFIED and shows as a data gap."
 
 [[reference]]
@@ -80,7 +81,7 @@ priority = 10
 aliases = ["prx"]
 requires_any = ["35mm", "35 mm", "t137.207", "t137207"]
 excludes = ["quartz", "titanium", "chronograph", "t137.210", "t137210",
-            "t137.410", "t137410"]
+            "t137.410", "t137410", "digital", "p475", "p480"]
 notes = ""
 
 [[reference]]
@@ -94,7 +95,7 @@ aliases = ["prx"]
 requires_any = ["quartz", "t137.410", "t137410"]
 excludes = ["powermatic", "automatic", "35mm", "35 mm", "titanium",
             "chronograph", "t137.407", "t137407", "t137.207", "t137207",
-            "t137.210", "t137210"]
+            "t137.210", "t137210", "digital", "p475", "p480"]
 notes = "Listed explicitly so a quartz is never priced as a Powermatic."
 
 [[reference]]
@@ -107,7 +108,7 @@ priority = 10
 aliases = ["prx"]
 requires_any = ["35mm", "35 mm", "t137.210", "t137210"]
 excludes = ["powermatic", "automatic", "titanium", "chronograph",
-            "t137.207", "t137207", "t137.407", "t137407"]
+            "t137.207", "t137207", "t137.407", "t137407", "digital", "p475", "p480"]
 notes = ""
 
 [[reference]]
@@ -119,7 +120,7 @@ verified = false
 priority = 10
 aliases = ["prx"]
 requires_any = ["titanium", "t137.807", "t137807"]
-excludes = ["quartz", "chronograph"]
+excludes = ["quartz", "chronograph", "digital", "p475", "p480"]
 notes = ""
 
 [[reference]]
@@ -132,7 +133,7 @@ priority = 10
 synthetic_key = true
 aliases = ["prx"]
 requires_any = ["chronograph", "chrono"]
-excludes = ["quartz"]
+excludes = ["quartz", "digital", "p475", "p480"]
 notes = "Thin UK supply and near the top of the search band."
 
 [[reference]]
@@ -145,7 +146,7 @@ priority = 10
 synthetic_key = true
 aliases = ["prx"]
 requires_any = ["digital"]
-excludes = []
+excludes = ["p475", "p480"]
 notes = ""
 
 [[reference]]
@@ -160,7 +161,7 @@ priority = 0
 synthetic_key = true
 aliases = ["prx"]
 requires_any = []
-excludes = []
+excludes = ["digital", "p475", "p480"]
 notes = "Catch-all for a title that says PRX and nothing that settles quartz vs Powermatic vs titanium. The band is deliberately enormous — a 2.5x spread is what the listing actually tells you, and the honest output is 'we cannot price this', not a confident midpoint. If these dominate the feed, the fix is to read the photos, not to narrow the band."
 
 # ======================================================================
@@ -423,10 +424,11 @@ verified = false
 priority = 10
 aliases = ["spb117", "spb121", "spb155", "spb157", "spb159", "spb197",
            "spb201", "spb210", "spb212", "spb241", "spb243", "spb289",
-           "spb507", "alpinist"]
+           "spb507", "seiko alpinist", "prospex alpinist"]
 requires_any = ["seiko", "prospex"]
-excludes = ["62mas", "spb143", "homage", "sarb017", "szsb", "sbdc"]
-notes = "The modern SPB Alpinists trade within about 10% of each other. `requires_any` is load-bearing: excluding the word 'homage' was not enough, because a clone brand writes 'MilFortic Alpinist Green Sunburst Dial' and never says homage at all."
+excludes = ["62mas", "spb143", "homage", "sarb017", "szsb", "sbdc",
+            "digital", "solar", "s822", "spb339"]
+notes = "The modern SPB Alpinists trade within about 10% of each other. `requires_any` is load-bearing: excluding the word 'homage' was not enough, because a clone brand writes 'MilFortic Alpinist Green Sunburst Dial' and never says homage at all. The bare word 'alpinist' is brand-qualified, and live traffic added the excludes: a vintage S822 solar digital and the SPB339 were both priced as this entry. An SPB reference not listed here is a different watch; add it to excludes when one appears."
 
 [[reference]]
 key = "SBDC087"
