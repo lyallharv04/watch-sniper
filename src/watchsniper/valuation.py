@@ -20,8 +20,8 @@ import re
 from dataclasses import dataclass, field
 
 from . import config as C
-from .blacklist import Blacklist, Increments
-from .catalogue import Catalogue, Match
+from .blacklist import Blacklist, Hit, Increments, hard_hits
+from .catalogue import Catalogue, Match, Reference
 from .fees import MaxBid, effective_fmv, max_allowable_bid
 from .models import Listing
 from .money import Pence
@@ -157,6 +157,10 @@ class Assessment:
     effective_price: Pence | None = None
     price_basis: str = ""
     config_fingerprint: str = ""
+    # Whether the verification models should see this listing (CLAUDE.md §6a),
+    # and the catalogue candidates they would be offered. Never read by a gate.
+    llm_candidate: bool = False
+    candidate_keys: list[str] = field(default_factory=list)
 
     @property
     def failed_gates(self) -> list[Gate]:
@@ -240,10 +244,47 @@ class Valuer:
 
         gates.append(self._seller_gate(listing, caveats))
 
+        condition = read_condition(listing)
         if match is None:
-            return self._finish(listing, gates, caveats, None)
+            assessment = self._finish(listing, gates, caveats, None)
+        else:
+            assessment = self._value(listing, match, gates, caveats, condition)
+        self._mark_candidate(assessment, hits, condition)
+        return assessment
 
-        return self._value(listing, match, gates, caveats, read_condition(listing))
+    def max_bid_for(
+        self, listing: Listing, ref: Reference, condition: str | None
+    ) -> MaxBid:
+        """The maximum allowable bid if this listing is `ref` in `condition`
+        (unstated is `GOOD`, as for the valuation itself)."""
+        mult = C.COND_MULT.get(condition or "GOOD", C.COND_MULT["GOOD"])
+        return max_allowable_bid(
+            effective_fmv(ref.point, mult),
+            business_seller=listing.is_business_seller,
+            inbound_postage=listing.shipping,
+        )
+
+    def _mark_candidate(
+        self, a: Assessment, hits: list[Hit], condition: str | None
+    ) -> None:
+        """Would the verification models be worth asking about this listing?
+
+        The rules ask one question of one reference. This asks whether *any*
+        of the closest candidates would clear its maximum bid, within
+        CANDIDATE_MARGIN_BP, so a title that names a cheap variant still
+        reaches the models when a sibling would be a deal. The margin only
+        admits a listing to verification; no gate reads the result.
+        """
+        seller = next(g for g in a.gates if g.name == "SELLER")
+        refs = self.catalogue.candidates(a.listing.title, C.LLM_CANDIDATES)
+        a.candidate_keys = [r.key for r in refs]
+        price, _ = self._effective_price(a.listing)
+        if not seller.passed or hard_hits(hits) or not refs or price is None:
+            return
+        ceiling = max(self.max_bid_for(a.listing, r, condition).amount for r in refs)
+        a.llm_candidate = ceiling > 0 and price * 10_000 <= ceiling * (
+            10_000 + C.CANDIDATE_MARGIN_BP
+        )
 
     # -- helpers -----------------------------------------------------------
 

@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS verdicts (
     headroom_pence      INTEGER,
     below_fmv_bp        INTEGER,
     derivation_json     TEXT NOT NULL,
-    config_fingerprint  TEXT NOT NULL
+    config_fingerprint  TEXT NOT NULL,
+    llm_candidate       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_verdicts_verdict ON verdicts(verdict);
 
@@ -224,7 +225,7 @@ class Database:
                 r["name"]
                 for r in self._conn.execute("PRAGMA table_info(verdicts)")
             }
-            if cols and "below_fmv_bp" not in cols:
+            if cols and "llm_candidate" not in cols:
                 self._conn.execute("DROP TABLE verdicts")
                 self.verdicts_dropped = True
             self._conn.executescript(SCHEMA)
@@ -318,8 +319,8 @@ class Database:
                 caveats_json, scope, bracelet, catalogue_key, catalogue_display,
                 fmv_verified, fmv_pence, eff_fmv_pence, mab_pence, price_pence,
                 price_basis, headroom_pence, below_fmv_bp, derivation_json,
-                config_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                config_fingerprint, llm_candidate
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(item_id) DO UPDATE SET
                 computed_at_utc=excluded.computed_at_utc,
                 verdict=excluded.verdict,
@@ -339,7 +340,8 @@ class Database:
                 headroom_pence=excluded.headroom_pence,
                 below_fmv_bp=excluded.below_fmv_bp,
                 derivation_json=excluded.derivation_json,
-                config_fingerprint=excluded.config_fingerprint
+                config_fingerprint=excluded.config_fingerprint,
+                llm_candidate=excluded.llm_candidate
             """,
             (
                 a.listing.item_id,
@@ -362,6 +364,7 @@ class Database:
                 a.below_fmv_bp,
                 json.dumps(_valuation_json(v)),
                 a.config_fingerprint,
+                int(a.llm_candidate),
             ),
         )
 
