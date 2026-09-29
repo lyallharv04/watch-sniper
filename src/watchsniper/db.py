@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .details import ItemDetails
 from .models import Listing, parse_ts, utcnow
 from .valuation import Assessment
 
@@ -646,6 +647,37 @@ class Database:
                 item_id, _iso(utcnow()), final_price, bid_count,
                 int(bid_count > 0), None if sold is None else int(sold), detail,
             ),
+        )
+
+    # -- item details (getItem, for the verification models) ----------------
+
+    def save_item_details(self, d: ItemDetails) -> None:
+        """Insert or replace. The listing must already be stored (FK)."""
+        self.execute(
+            "INSERT OR REPLACE INTO item_details (item_id,fetched_at_utc,"
+            "aspects_json,description_text,image_urls_json,raw_json)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                d.item_id,
+                _iso(d.fetched_at),
+                json.dumps([[n, v] for n, v in d.aspects]),
+                d.description_text,
+                json.dumps(list(d.image_urls)),
+                json.dumps(d.raw, default=str),
+            ),
+        )
+
+    def item_details(self, item_id: str) -> ItemDetails | None:
+        row = self.one("SELECT * FROM item_details WHERE item_id=?", (item_id,))
+        if row is None:
+            return None
+        return ItemDetails(
+            item_id=row["item_id"],
+            fetched_at=parse_ts(row["fetched_at_utc"]) or utcnow(),
+            aspects=[(str(n), str(v)) for n, v in json.loads(row["aspects_json"])],
+            description_text=row["description_text"],
+            image_urls=list(json.loads(row["image_urls_json"])),
+            raw=json.loads(row["raw_json"]),
         )
 
     def all_listings(self) -> list[sqlite3.Row]:

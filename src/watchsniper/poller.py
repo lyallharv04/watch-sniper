@@ -9,6 +9,7 @@ other two have stopped.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 import traceback
@@ -21,6 +22,7 @@ from . import notify
 from .blacklist import Blacklist, Increments
 from .catalogue import Catalogue
 from .db import Database
+from .details import ItemDetails, from_get_item
 from .ebay import BudgetExhausted, EbayClient, EbayError
 from .models import from_item_summary, utcnow
 from .valuation import Assessment, Valuer
@@ -205,6 +207,9 @@ class Engine:
                     self.db.save_closing(item_id, None, 0, None, "HTTP 404")
                     done += 1
                 continue
+            # The same response carries what the verification models need;
+            # keep it rather than fetch the item again later.
+            self._store_details(item_id, row)
             final = from_item_summary(row)
             price = final.price if final.currency == "GBP" else None
             availability = (row.get("estimatedAvailabilities") or [{}])[0]
@@ -218,6 +223,32 @@ class Engine:
             )
             done += 1
         return done
+
+    def item_details(self, item_id: str) -> ItemDetails | None:
+        """The full item for the verification models: the stored copy, else
+        one getItem, stored. None when eBay refuses; BudgetExhausted
+        propagates like every other eBay call."""
+        stored = self.db.item_details(item_id)
+        if stored is not None:
+            return stored
+        assert self.client is not None
+        try:
+            row = self.client.get_item(item_id, day=_today())
+        except BudgetExhausted:
+            raise
+        except EbayError:
+            return None
+        return self._store_details(item_id, row)
+
+    def _store_details(self, item_id: str, row: dict) -> ItemDetails:
+        d = from_get_item(row)
+        # Keyed on the id we asked for, which is the one in `listings`.
+        d.item_id = item_id
+        try:
+            self.db.save_item_details(d)
+        except sqlite3.IntegrityError:
+            pass  # no stored listing to hang it on; still usable in hand
+        return d
 
     def _should_notify(self, a: Assessment, is_new: bool) -> bool:
         if not a.is_actionable:
