@@ -343,7 +343,10 @@ so the web layer still does no arithmetic):
 
 - **Buy It Now** — `/`.
 - **Auctions** — `/?view=auctions`, those ending within `AUCTION_ENDING_SOON`,
-  under a standing caution that the price is only the next valid bid.
+  under a standing caution that the price is only the next valid bid. Every
+  live `DEAL` auction is shown first, in its own section, whatever its end
+  time — an alert for an auction days from its end must land on the feed — and
+  is not repeated in the ending-soon list below.
 - **All** — `/?verdict=all`, every listing in either format.
 
 The first two never show an ended listing. "All" and the item page show it

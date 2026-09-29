@@ -406,6 +406,7 @@ class Database:
         limit: int = 100,
         offset: int = 0,
         ending_within: timedelta | None = None,
+        exclude_verdict: str = "",
     ) -> list[sqlite3.Row]:
         """Listings with their verdicts, furthest below FMV first.
 
@@ -414,6 +415,9 @@ class Database:
         catalogue-matched listings the blacklist did not reject; "all" means
         everything, in either format, ignoring the view; anything else is an
         exact verdict within the view. Unpriced rows sort last, newest first.
+        `ending_within` None on the auction view means any future end time.
+        `exclude_verdict` drops one verdict, so a list shown under a section
+        of that verdict does not repeat it.
         """
         where, params = ["1=1"], []
         now = utcnow().replace(microsecond=0)
@@ -421,10 +425,11 @@ class Database:
             # The two views never show an ended listing; "all" shows it marked.
             where.append("l.ended_at_utc IS NULL")
             if view == "auctions":
-                where.append(
-                    "l.is_auction = 1 AND l.end_time_utc > ? AND l.end_time_utc <= ?"
-                )
-                params += [_iso(now), _iso(now + (ending_within or timedelta(0)))]
+                where.append("l.is_auction = 1 AND l.end_time_utc > ?")
+                params.append(_iso(now))
+                if ending_within is not None:
+                    where.append("l.end_time_utc <= ?")
+                    params.append(_iso(now + ending_within))
             else:
                 where.append("l.is_auction = 0")
         if verdict == "":
@@ -432,6 +437,9 @@ class Database:
         elif verdict != "all":
             where.append("v.verdict = ?")
             params.append(verdict)
+        if exclude_verdict:
+            where.append("v.verdict <> ?")
+            params.append(exclude_verdict)
         if brand:
             where.append("v.catalogue_display LIKE ?")
             params.append(f"{brand}%")

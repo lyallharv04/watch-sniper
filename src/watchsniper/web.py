@@ -681,9 +681,19 @@ def render_feed(engine: Engine, params: dict) -> str:
     brand = params.get("brand", [""])[0]
     q = params.get("q", [""])[0]
     limit = 250
+    # On the auction view a DEAL is shown whatever its end time, in its own
+    # section above the ending-soon list, which then leaves it out. An alert
+    # for an auction ending in three days must land somewhere on the feed.
+    deal_section = view == "auctions" and verdict in ("", "DEAL")
+    deals = (
+        engine.db.feed(view="auctions", verdict="DEAL", brand=brand, query=q,
+                       limit=limit, ending_within=None)
+        if deal_section else []
+    )
     rows = engine.db.feed(
         view=view, verdict=verdict, brand=brand, query=q, limit=limit,
         ending_within=C.AUCTION_ENDING_SOON,
+        exclude_verdict="DEAL" if deal_section else "",
     )
     counts = {r["verdict"]: r["n"] for r in engine.db.verdict_counts()}
 
@@ -738,6 +748,19 @@ def render_feed(engine: Engine, params: dict) -> str:
         '<div class="card empty">Nothing here. If the feed has been running a while '
         'and is still empty, that is itself a finding — check '
         '<a href="/health">Health</a> for the poll log.</div>'
+        if not deals
+        else f'<div class="card empty">No other auction ends within {span(C.AUCTION_ENDING_SOON)}.</div>'
+    )
+    count_line = f'<div class="sub">{e(count)}</div>'
+    deal_block = (
+        f'<div class="list cards">{"".join(feed_card(r, back) for r in deals)}</div>'
+        f'<div class="head tight">{count_line}</div>'
+        if deals else ""
+    )
+    head_count = (
+        f'<div class="sub">{len(deals)} DEAL auction{"" if len(deals) == 1 else "s"} '
+        "· any end time · sorted by % below FMV</div>"
+        if deals else count_line
     )
     return f"""
 <div class="head"><h1 class="page">Feed</h1>
@@ -753,7 +776,8 @@ def render_feed(engine: Engine, params: dict) -> str:
 <div class="tally">{tally}</div></div>
 </form></details>
 {caution}
-<div class="sub">{e(count)}</div></div>
+{head_count}</div>
+{deal_block}
 <div class="list cards">{cards}</div>"""
 
 
