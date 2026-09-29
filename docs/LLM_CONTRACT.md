@@ -71,7 +71,9 @@ unrelated `ANTHROPIC_API_KEY`.
 
 `Catalogue.candidates(self, title: str, n: int = 3) -> list[Reference]`
 
-- Empty when no catalogue brand appears in the title.
+- Empty when no catalogue brand appears in the title and the rules match
+  nothing. A rules match with no brand word ("Prospex Alpinist SPB121")
+  counts as naming its entry's brand.
 - If `match(title)` returns a reference, it is first.
 - The rest are references of the same brand, scored by how many of their
   distinctive tokens (key, aliases, `requires_any`, model words) occur in the
