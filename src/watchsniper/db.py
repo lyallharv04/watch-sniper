@@ -105,6 +105,67 @@ CREATE TABLE IF NOT EXISTS closings (
     sold              INTEGER
 );
 
+-- The full item as getItem returns it, for the verification models. Written
+-- on first need and at close. Seller-supplied text is stored as received and
+-- only ever reaches a model as tagged data (docs/LLM_CONTRACT.md).
+CREATE TABLE IF NOT EXISTS item_details (
+    item_id           TEXT PRIMARY KEY REFERENCES listings(item_id),
+    fetched_at_utc    TEXT NOT NULL,
+    aspects_json      TEXT NOT NULL,
+    description_text  TEXT NOT NULL,
+    image_urls_json   TEXT NOT NULL,
+    raw_json          TEXT NOT NULL
+);
+
+-- One row per model call attempted. Facts only: no money column is a model's
+-- output. The would_* columns are what live mode would have decided, computed
+-- by code from the stored facts and recomputed by rescore without a call.
+CREATE TABLE IF NOT EXISTS llm_results (
+    id                INTEGER PRIMARY KEY,
+    item_id           TEXT NOT NULL REFERENCES listings(item_id),
+    stage             TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    prompt_version    TEXT NOT NULL,
+    candidates_json   TEXT NOT NULL,
+    candidate_hash    TEXT NOT NULL,
+    input_hash        TEXT NOT NULL,
+    requested_at_utc  TEXT NOT NULL,
+    latency_ms        INTEGER NOT NULL DEFAULT 0,
+    ok                INTEGER NOT NULL,
+    error             TEXT,
+    catalogue_key     TEXT,
+    confidence        TEXT,
+    condition         TEXT,
+    box_papers        TEXT,
+    bracelet          TEXT,
+    evidence_json     TEXT NOT NULL DEFAULT '[]',
+    evidence_verified INTEGER NOT NULL DEFAULT 0,
+    red_flags_json    TEXT NOT NULL DEFAULT '[]',
+    reason            TEXT NOT NULL DEFAULT '',
+    raw_response      TEXT NOT NULL DEFAULT '',
+    input_tokens      INTEGER NOT NULL DEFAULT 0,
+    output_tokens     INTEGER NOT NULL DEFAULT 0,
+    cost_micro_usd    INTEGER NOT NULL DEFAULT 0,
+    escalated_from    INTEGER REFERENCES llm_results(id),
+    would_verdict     TEXT,
+    would_mab_pence   INTEGER,
+    would_reason      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_llm_key
+    ON llm_results(item_id, stage, model, prompt_version, candidate_hash);
+CREATE INDEX IF NOT EXISTS ix_llm_requested ON llm_results(requested_at_utc);
+
+CREATE TABLE IF NOT EXISTS llm_labels (
+    id              INTEGER PRIMARY KEY,
+    llm_result_id   INTEGER NOT NULL REFERENCES llm_results(id),
+    item_id         TEXT NOT NULL,
+    correct         INTEGER NOT NULL,
+    note            TEXT NOT NULL DEFAULT '',
+    created_at_utc  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_llm_labels_result ON llm_labels(llm_result_id);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY,
     at_utc   TEXT NOT NULL,

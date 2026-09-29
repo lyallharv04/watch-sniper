@@ -176,6 +176,9 @@ real traffic rather than to a hypothetical.
 
 ### A10. No LLM extraction in Phase 1
 
+*Reversed in part by **A19** on 2026-09-29: models now run in shadow mode.
+Kept for its reasoning, which A19 depends on.*
+
 The inherited design routed low-confidence listings to a vision model to
 resolve scope, bracelet and Christopher Ward logo era.
 
@@ -311,6 +314,61 @@ exposed dashboard — and that `/api/health` sits behind it like every other
 path. `PUBLIC_BASE_URL` makes alert links point at the tunnel hostname.
 
 *Supersedes **A5**, **D20**, **D30** and **D31**.*
+
+### A19. Verification models run in shadow mode — 2026-09-29
+
+The operator wants a model to read the whole listing — item specifics,
+description, photographs — and say which catalogue reference it is, because
+the title alone cannot separate the variants that matter most (PRX quartz
+against Powermatic is roughly half the money) and cannot see a custom dial or
+aftermarket hands.
+
+This reverses A10, but not A10's reasoning. A10's objection was that a model
+filling in an unstated field turns a known unknown into a confident value
+whose error is then indistinguishable from FMV error in the outcome log. So
+the reversal is staged to keep the two separable:
+
+- **Shadow first.** Two models run on every candidate listing and on every
+  catalogue-matched auction at close. Their answers, the raw response, the
+  model and the prompt version are stored and shown on the item page. No
+  verdict, alert or Observed figure changes. The rules pipeline is what the
+  operator acts on, so the outcome log still measures the rules.
+- **Facts only.** The models name a candidate, a condition grade, labels and
+  red flags, and quote their evidence. They are never shown a price. All money
+  is computed by the existing fee code from their identification, and a
+  model's condition can only lower the stated grade, never raise it.
+- **Evidence is checked by code.** What live mode would call a `DEAL` requires
+  a quoted reference number, item specific or title word that code finds in
+  the input. A model's claim alone is a `CHECK`. A blacklist flag caps a
+  listing at `CHECK`.
+- **Seller text is untrusted input.** It is tagged per call with a random id
+  and the models are told never to follow it. The worst a hostile description
+  can do is a wrong fact, which the evidence check and the flag cap contain.
+- **Wider net, same bar.** A listing reaches the models if one of its three
+  closest catalogue candidates would clear the maximum bid within
+  `CANDIDATE_MARGIN_BP`. That margin admits a listing to verification; it
+  never lets a price over the maximum bid alert.
+- **Failure is rules-only.** A missing key, the daily spend cap, a timeout or
+  an unparseable answer leaves the rules verdict standing. `rescore` never
+  calls a model.
+- **No SDK.** Both providers are called over stdlib urllib, which keeps A1
+  intact on a host where system pip installs are blocked.
+
+**Live mode — models deciding `DEAL`, `CHECK` and `REJECT_LLM` and sending
+alerts — is not built, and is not to be built until all three hold:**
+
+1. at least two weeks of shadow mode on the deployed host;
+2. at least twenty right/wrong labels on model results;
+3. accuracy reported per model from those labels, including a review sample
+   of what live mode would have rejected — so its false negatives are
+   counted, not only its false positives.
+
+What would stop it: labelled accuracy that does not beat the rules on the
+listings where they disagree, or a model whose `high` confidence is wrong
+often enough that the evidence check is doing all the work.
+
+*Reverses **A10** in part. Supersedes inherited **D16**'s "moot" status: there
+is a prompt again, and its enums are generated from the code.*
 
 ---
 
