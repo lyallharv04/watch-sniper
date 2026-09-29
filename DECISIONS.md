@@ -370,6 +370,42 @@ often enough that the evidence check is doing all the work.
 *Reverses **A10** in part. Supersedes inherited **D16**'s "moot" status: there
 is a prompt again, and its enums are generated from the code.*
 
+### A20. A shadow veto on alerts — 2026-09-29
+
+A partial step towards live mode, taken before A19's condition is met, and
+limited to the one thing that condition protects least: alerts.
+
+On the first day of shadow mode on the deployed host, all six `DEAL`s were
+wrong, five of them catalogue mismatches (a 1980s PRX, a PRX Digital, a solar
+digital Alpinist, an SPB339), and both shadow models rejected every one with
+specific, correct reasons. An alert the operator learns to ignore is worse than
+no alert, because the next one is ignored too.
+
+So when both shadow models' current answers identify a listing with `high`
+confidence and would reject it (`REJECT_LLM`), its `DEAL` alert is not sent.
+Everything else is unchanged:
+
+- **Verdicts are unchanged.** The listing stays `DEAL` in the feed, marked
+  VETOED with both models' reasons, and the outcome log still measures the
+  rules. The veto can only take an alert away; it can never create one.
+- **Any doubt fails open.** One model medium or low, a model that identifies
+  the listing, a failed call or a missing answer: the alert goes out. The
+  escalation model has no vote. Answers under an old prompt or candidate set
+  do not count.
+- **It is visible.** A vetoed alert is logged, shown on Health as "Vetoed",
+  and is news again — like an alert — only at a lower price.
+- **It can be turned off.** `LLM_VETO`, on by default, and only ever active
+  with `LLM_MODE=shadow`.
+
+The cost is the case it is built to accept: a genuine deal both models reject
+with high confidence arrives silently. That is why it stays on the feed, and
+why the review sample exists. What would reverse this: a vetoed listing the
+operator labels as a real deal, or accuracy by model (A19) showing `high`
+confidence rejections are wrong often enough to matter.
+
+*Partly anticipates the live mode of **A19** for alerts only. A19's condition
+still governs verdicts, `CHECK` and `REJECT_LLM`.*
+
 ---
 
 ## 2. Inherited decisions, and what happened to them

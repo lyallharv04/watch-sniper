@@ -94,7 +94,7 @@ class Engine:
         """
         from .db import listing_from_row
 
-        from .shadow import recompute_would
+        from .shadow import recompute_vetoes, recompute_would
 
         counts: dict[str, int] = {}
         for row in self.db.all_listings():
@@ -103,6 +103,7 @@ class Engine:
         # Stored model answers are re-judged under the new constants from
         # their stored facts. No model is called.
         recompute_would(self)
+        recompute_vetoes(self)
         self.db.audit("system", "rescore", C.valuation_fingerprint())
         return counts
 
@@ -156,9 +157,16 @@ class Engine:
                     if is_new:
                         result.items_new += 1
                     if self._should_notify(assessment, is_new):
-                        result.alerts += 1
-                        if notify:
-                            self._notify(assessment)
+                        if self._vetoed(assessment):
+                            if notify:
+                                self.db.log_notification(
+                                    "vetoed", True, "suppressed by the shadow veto",
+                                    listing.item_id, assessment.effective_price,
+                                )
+                        else:
+                            result.alerts += 1
+                            if notify:
+                                self._notify(assessment)
                 page_no += 1
                 if len(rows) < C.SEARCH_PAGE_LIMIT:
                     break
@@ -363,6 +371,15 @@ class Engine:
         # An auction seen again after a bid can become actionable when it was
         # not before, so notify on transition rather than only on first sight.
         return is_new or a.listing.is_auction
+
+    def _vetoed(self, a: Assessment) -> bool:
+        """Is this DEAL's alert suppressed by the shadow veto? Only in shadow
+        mode with LLM_VETO on; the verdict stays DEAL either way."""
+        return (
+            self.shadow is not None
+            and C.LLM_VETO
+            and self.db.veto(a.listing.item_id) is not None
+        )
 
     def _notify(self, a: Assessment) -> None:
         note = notify.alert_for(a, self._item_url(a.listing.item_id))

@@ -299,6 +299,7 @@ text-transform:uppercase;padding:10px;font-weight:700}
 .tablecard td{padding:11px 10px;border-top:1px solid var(--line);vertical-align:top}
 .tablecard .r{text-align:right;white-space:nowrap}
 .llm{border-top:1px solid var(--line);padding:12px 0 4px}
+.veto{display:flex;flex-direction:column;gap:4px;margin-top:6px}
 .llmhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px}
 .llmhead b{font-size:13.5px}.llmhead span{font-size:12px;color:var(--mute)}
 .labels.two{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px}
@@ -645,6 +646,23 @@ def ended_chip(r: sqlite3.Row) -> str:
     return ""
 
 
+def veto_note(r: sqlite3.Row, *, full: bool = False) -> str:
+    """VETOED, with both models' reasons, on a DEAL whose alert the shadow
+    veto suppressed (DECISIONS.md A20). The verdict itself is unchanged."""
+    if r["verdict"] != "DEAL" or not r["veto_reasons_json"]:
+        return ""
+    reasons = json.loads(r["veto_reasons_json"])
+    lines = "".join(
+        f'<div class="reason"><b>{e(x["model"])}</b>: {e(x["reason"])}'
+        + (f' <span class="nil">({e(x["why"])})</span>' if full and x.get("why") else "")
+        + "</div>"
+        for x in reasons
+    )
+    head = ('<div class="cavs"><span class="cav warn">VETOED — alert not sent; '
+            'both models would reject it</span></div>')
+    return f'<div class="veto">{head}{lines}</div>'
+
+
 def feed_card(r: sqlite3.Row, back: str = "/") -> str:
     caveats = json.loads(r["caveats_json"] or "[]")
     fmv = r["fmv_pence"]
@@ -666,6 +684,7 @@ def feed_card(r: sqlite3.Row, back: str = "/") -> str:
 <div><span class="lbl">Max bid</span><b>{fmt(r['mab_pence'])}</b></div>
 <div><span class="lbl">Headroom</span>{headroom(r['headroom_pence'])}</div></div>
 <div class="cavs">{ended_chip(r)}{caveat_chips(caveats, only_important=True)}</div>
+{veto_note(r)}
 {label_form(r['item_id'], (r['labels'] or '').split(','), back=back)}
 </article>"""
 
@@ -886,7 +905,7 @@ def render_item(engine: Engine, item_id: str) -> str:
 
     return f"""
 <div class="ihead"><div class="cavs" style="align-items:center">{verdict_chip(row['verdict'])}{ended_chip(row)}{caveat_chips(caveats, only_important=True)}</div>
-<h1>{e(row['title'])}</h1><div class="reason">{e(row['primary_reason'])}</div></div>
+<h1>{e(row['title'])}</h1><div class="reason">{e(row['primary_reason'])}</div>{veto_note(row, full=True)}</div>
 <div class="summary"><div class="card">
 <div class="big3"><div><span class="lbl">Price</span><b>{fmt(price)}</b><small>{e(basis)}</small></div>
 <div><span class="lbl">Max bid</span><b>{fmt(row['mab_pence'])}</b></div>
@@ -994,14 +1013,17 @@ def render_health(engine: Engine) -> str:
     names = {"stalled": "Ingestion stopped", "recovered": "Ingestion resumed", "test": "Test notification"}
 
     def note_title(r) -> str:
-        if r["kind"] != "alert":
+        if r["kind"] not in ("alert", "vetoed"):
             return names.get(r["kind"], r["kind"])
         what = r["catalogue_display"] or r["item_id"] or "alert"
+        if r["kind"] == "vetoed":
+            what = f"Vetoed: {what}"
         return f"{what} at {fmt(r['price_pence'])}" if r["price_pence"] is not None else what
 
     notes = "".join(
         f'<div class="note"><div><b>{e(note_title(r))}</b><span>{when(r["at_utc"])}</span></div>'
-        f'<span class="sent{"" if r["ok"] else " failed"}">{"sent" if r["ok"] else "FAILED"}</span></div>'
+        f'<span class="sent{"" if r["ok"] else " failed"}">'
+        f'{"not sent" if r["kind"] == "vetoed" else "sent" if r["ok"] else "FAILED"}</span></div>'
         for r in engine.db.recent_notifications()
     ) or '<div class="note"><span>none yet</span></div>'
 

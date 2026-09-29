@@ -173,6 +173,15 @@ CREATE TABLE IF NOT EXISTS llm_labels (
 );
 CREATE INDEX IF NOT EXISTS ix_llm_labels_result ON llm_labels(llm_result_id);
 
+-- A shadow veto on a listing's alert (DECISIONS.md A20): set while both
+-- shadow models' current answers would reject it with high confidence.
+-- reasons_json holds each model's reason. Derived; rescore rebuilds it.
+CREATE TABLE IF NOT EXISTS vetoes (
+    item_id         TEXT PRIMARY KEY REFERENCES listings(item_id),
+    decided_at_utc  TEXT NOT NULL,
+    reasons_json    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY,
     at_utc   TEXT NOT NULL,
@@ -454,6 +463,8 @@ class Database:
                    v.price_pence AS eff_price_pence, v.price_basis,
                    v.headroom_pence, v.below_fmv_bp, v.caveats_json, v.scope,
                    v.bracelet, {_END_COLUMNS},
+                   (SELECT reasons_json FROM vetoes
+                     WHERE vetoes.item_id = l.item_id) AS veto_reasons_json,
                    (SELECT group_concat(label) FROM labels
                      WHERE labels.item_id = l.item_id) AS labels
               FROM listings l JOIN verdicts v ON v.item_id = l.item_id
@@ -540,7 +551,9 @@ class Database:
             " v.catalogue_display, v.fmv_verified, v.fmv_pence, v.mab_pence,"
             " v.price_pence AS eff_price_pence, v.price_basis, v.headroom_pence,"
             " v.below_fmv_bp, v.derivation_json, v.config_fingerprint,"
-            f" v.computed_at_utc, {_END_COLUMNS}"
+            f" v.computed_at_utc, {_END_COLUMNS},"
+            " (SELECT reasons_json FROM vetoes WHERE vetoes.item_id = l.item_id)"
+            " AS veto_reasons_json"
             " FROM listings l"
             " LEFT JOIN verdicts v ON v.item_id = l.item_id WHERE l.item_id = ?",
             (_iso(utcnow()), item_id),
@@ -633,14 +646,18 @@ class Database:
         )
 
     def last_alert(self, item_id: str) -> sqlite3.Row | None:
-        """The most recent successfully delivered alert for this item, if any.
+        """The most recent successfully delivered alert for this item, or the
+        most recent vetoed one, if any.
 
         Its `price_pence` is the effective price the alert quoted; NULL on
-        rows written before the column existed.
+        rows written before the column existed. A vetoed alert counts, so a
+        vetoed listing is not re-vetoed every sweep: like an alert, it is
+        news again only at a lower price.
         """
         return self.one(
-            "SELECT price_pence FROM notifications"
-            " WHERE item_id=? AND ok=1 AND kind='alert' ORDER BY id DESC LIMIT 1",
+            "SELECT price_pence FROM notifications WHERE item_id=?"
+            " AND ((ok=1 AND kind='alert') OR kind='vetoed')"
+            " ORDER BY id DESC LIMIT 1",
             (item_id,),
         )
 
@@ -856,6 +873,20 @@ class Database:
             " WHERE r.would_verdict = 'REJECT_LLM' ORDER BY random() LIMIT ?",
             (limit,),
         )
+
+    def set_veto(self, item_id: str, reasons: list[dict] | None) -> None:
+        if reasons:
+            self.execute(
+                "INSERT OR REPLACE INTO vetoes (item_id,decided_at_utc,reasons_json)"
+                " VALUES (?,?,?)",
+                (item_id, _iso(utcnow()), json.dumps(reasons)),
+            )
+        else:
+            self.execute("DELETE FROM vetoes WHERE item_id=?", (item_id,))
+
+    def veto(self, item_id: str) -> list[dict] | None:
+        row = self.one("SELECT reasons_json FROM vetoes WHERE item_id=?", (item_id,))
+        return json.loads(row["reasons_json"]) if row else None
 
     def update_llm_would(
         self, result_id: int, verdict: str | None, mab: int | None, reason: str

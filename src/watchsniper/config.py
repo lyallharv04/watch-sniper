@@ -187,6 +187,18 @@ LLM_MODE = (
     )
     or "off"
 ).strip().lower()
+LLM_VETO = (
+    env(
+        "LLM_VETO",
+        "on",
+        "'on' or 'off'. With LLM_MODE=shadow, a DEAL alert is not sent when "
+        "both shadow models identify the listing with high confidence and live "
+        "mode would reject it; the listing shows as VETOED with both reasons. "
+        "Verdicts are unchanged either way (DECISIONS.md A20).",
+        "Defaults to on. Has no effect unless LLM_MODE is shadow.",
+    )
+    or "on"
+).strip().lower() not in ("off", "0", "false", "no")
 ANTHROPIC_API_KEY = env(
     "ANTHROPIC_API_KEY",
     None,

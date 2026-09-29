@@ -144,7 +144,17 @@ class Shadow:
             row_id = self._ask(listing, stage, self.escalation, inp, lowest["id"])
             if row_id is not None:
                 stored.append(row_id)
+        if stage == "listing":
+            self.db.set_veto(listing.item_id, self.veto_reasons(listing.item_id, chash))
         return stored
+
+    def veto_reasons(self, item_id: str, chash: str) -> list[dict] | None:
+        """Both shadow models' reasons, when both current answers would be
+        REJECT_LLM with high confidence; otherwise None (DECISIONS.md A20).
+        Only answers under the current prompt and candidate set count, and
+        the escalation model has no vote."""
+        rows = self.db.llm_ok_results(item_id, "listing", PROMPT_VERSION, chash)
+        return veto_from(rows, self.models)
 
     def _lowest(self, listing: Listing, stage: str, chash: str):
         """The least confident shadow answer below `high`, if there is one:
@@ -198,6 +208,47 @@ class Shadow:
             evidence_verified=result.evidence_verified,
             red_flags=result.red_flags,
         )
+
+
+def veto_from(rows, models: tuple[str, ...]) -> list[dict] | None:
+    """The veto rule on stored rows: each model's latest answer must be
+    high confidence and would-be REJECT_LLM. A model with no answer, a
+    failed call or any other verdict means no veto — the alert goes out."""
+    latest = {}
+    for r in rows:
+        if r["model"] in models:
+            latest[r["model"]] = r
+    if set(latest) != set(models):
+        return None
+    if all(r["confidence"] == "high" and r["would_verdict"] == "REJECT_LLM"
+           for r in latest.values()):
+        return [
+            {"model": m, "reason": latest[m]["reason"], "why": latest[m]["would_reason"]}
+            for m in models
+        ]
+    return None
+
+
+def recompute_vetoes(engine) -> int:
+    """Re-derive every veto from stored answers, after recompute_would."""
+    from .db import listing_from_row
+
+    items = [r["item_id"] for r in engine.db.query(
+        "SELECT DISTINCT item_id FROM llm_results WHERE stage='listing'")]
+    n = 0
+    for item_id in items:
+        row = engine.db.one("SELECT * FROM listings WHERE item_id=?", (item_id,))
+        if row is None:
+            continue
+        refs = engine.valuer.catalogue.candidates(listing_from_row(row).title, C.LLM_CANDIDATES)
+        chash = candidate_hash(tuple(Candidate(r.key, r.brand, r.model, r.notes) for r in refs))
+        reasons = veto_from(
+            engine.db.llm_ok_results(item_id, "listing", PROMPT_VERSION, chash),
+            C.LLM_SHADOW_MODELS,
+        )
+        engine.db.set_veto(item_id, reasons)
+        n += bool(reasons)
+    return n
 
 
 def recompute_would(engine) -> int:

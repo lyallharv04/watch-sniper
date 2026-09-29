@@ -150,7 +150,9 @@ a listing can sit under the maximum and still be unreachable at the next
 increment step.
 
 A `DEAL` alerts once. It alerts again only if its price later drops below the
-price quoted in the last delivered alert.
+price quoted in the last delivered alert. In shadow mode with `LLM_VETO` on,
+the alert is not sent when both shadow models would reject the listing with
+high confidence (§6a); a vetoed alert counts as the last alert for that rule.
 
 ---
 
@@ -293,7 +295,15 @@ and no blacklist flag. `rescore` recomputes that and never calls a model.
 Calls go over stdlib urllib to fixed endpoints. Spend is integer micro-USD,
 capped per UTC day at `LLM_DAILY_SPEND_CAP_MICRO_USD`; at the cap, with no key,
 or on any error the service is rules-only and says so on Health. Nothing a
-model returns reaches a verdict, an alert or the Observed column.
+model returns reaches a verdict or the Observed column.
+
+**The one exception is the veto** ([DECISIONS.md A20](DECISIONS.md)), and it
+reaches alerts only. With `LLM_VETO` on, a `DEAL` whose two shadow models both
+answered — under the current prompt and candidate set — with `high`
+confidence and a would-be `REJECT_LLM` sends no alert. It stays `DEAL`, shows
+as VETOED with both reasons, and is logged on Health. Any other combination,
+a failed call or a missing answer sends the alert as before; the escalation
+model has no vote.
 
 ---
 
