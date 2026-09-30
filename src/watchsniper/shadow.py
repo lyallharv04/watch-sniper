@@ -282,6 +282,25 @@ def confident_observed(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
     }
 
 
+def suggested_fmvs(catalogue, confident: dict) -> dict[str, tuple[int, int, int]]:
+    """Per catalogue entry with at least OBSERVED_MIN_AUCTIONS confident
+    sales: (suggested FMV, sales behind it, difference from the current FMV
+    point in basis points of it, signed, truncated towards zero).
+
+    The suggestion is the confident-only median. Display only: the
+    catalogue is edited by hand and nothing reads this back.
+    """
+    out = {}
+    for ref in catalogue.references:
+        median, n, _ = confident.get(ref.key, (None, 0, 0))
+        if median is None or n < C.OBSERVED_MIN_AUCTIONS or not ref.point:
+            continue
+        delta = median - ref.point
+        bp = abs(delta) * 10_000 // ref.point
+        out[ref.key] = (median, n, bp if delta >= 0 else -bp)
+    return out
+
+
 def recompute_vetoes(engine) -> int:
     """Re-derive every veto from stored answers, after recompute_would."""
     from .db import listing_from_row

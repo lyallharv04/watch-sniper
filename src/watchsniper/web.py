@@ -219,7 +219,7 @@ background:var(--sf);border-radius:16px;padding:8px 10px}
 .cstrip .lbl{font-size:10px}
 .cstrip b{font-size:14.5px;font-weight:750;font-variant-numeric:tabular-nums}
 .cstrip small{font-size:10.5px;color:var(--mute)}
-.cstrip.two{grid-template-columns:1fr}
+.cstrip.pair{grid-template-columns:1fr 1fr}
 .band{font-size:12.5px;color:var(--accInk);line-height:1.35}
 .notes{font-size:12.5px;color:var(--mute);line-height:1.35}
 .cattable{display:none}
@@ -940,11 +940,12 @@ def render_missing(engine: Engine) -> str:
 
 
 def render_catalogue(engine: Engine) -> str:
-    from .shadow import confident_observed
+    from .shadow import confident_observed, suggested_fmvs
 
     usage = engine.db.catalogue_usage()
     observed = engine.db.observed_closings()
     confident = confident_observed(engine.db)
+    suggested = suggested_fmvs(engine.catalogue, confident)
     refs = sorted(
         engine.catalogue.references,
         key=lambda r: (r.verified, -usage.get(r.key, 0), r.brand),
@@ -961,6 +962,14 @@ def render_catalogue(engine: Engine) -> str:
         shown = n >= C.OBSERVED_MIN_AUCTIONS
         return (fmt(median) if shown else "—"), n, shown, excluded
 
+    def suggestion(key: str) -> tuple[str, str]:
+        """(value, note) for the suggested FMV; a dash until there are
+        enough confident sales. The difference is computed in shadow.py."""
+        if key not in suggested:
+            return "—", f"needs {C.OBSERVED_MIN_AUCTIONS} confident sales"
+        value, n, bp = suggested[key]
+        return fmt(value), f"{n} sales · {'+' if bp > 0 else ''}{pct(bp)} vs FMV"
+
     def band(r) -> str:
         return f"{fmt(r.fmv_low)}–{fmt(r.fmv_high)} · valued at midpoint" if r.is_band else ""
 
@@ -970,6 +979,7 @@ def render_catalogue(engine: Engine) -> str:
         sold_note = f"{n} sold" if shown else f"fewer than {C.OBSERVED_MIN_AUCTIONS} sold"
         cmedian, cn, cshown, cexcl = conf(r.key)
         conf_note = (f"{cn} sold" if cshown else f"{cn} of {C.OBSERVED_MIN_AUCTIONS} needed") + f" · {cexcl} excluded"
+        sval, snote = suggestion(r.key)
         ver = '<span class="ver ok">✓ verified</span>' if r.verified else '<span class="ver">— unverified</span>'
         cards.append(f"""<div class="card cat">
 <div class="cattop"><div><span class="ref">{e(r.display)}</span><span class="key">{e(r.key)}</span></div>{ver}</div>
@@ -977,7 +987,8 @@ def render_catalogue(engine: Engine) -> str:
 <div><span class="lbl">Observed</span><b>{median}</b><small>{sold_note}</small></div>
 <div><span class="lbl">Unsold</span><b>{unsold}</b></div>
 <div><span class="lbl">Priced</span><b>{usage.get(r.key, 0)}</b></div></div>
-<div class="cstrip two"><div><span class="lbl">Observed, confident only</span><b>{cmedian}</b><small>{conf_note}</small></div></div>
+<div class="cstrip pair"><div><span class="lbl">Observed, confident only</span><b>{cmedian}</b><small>{conf_note}</small></div>
+<div><span class="lbl">Suggested FMV</span><b>{sval}</b><small>{e(snote)}</small></div></div>
 {f'<div class="band">Band: {band(r)}</div>' if r.is_band else ''}
 {f'<div class="notes">{e(r.notes)}</div>' if r.notes else ''}</div>""")
         trs.append(
@@ -990,12 +1001,15 @@ def render_catalogue(engine: Engine) -> str:
             f"<span class='nil'>{f'({n})' if shown else ''}</span></td>"
             f"<td class='r'><span style='font-weight:650'>{cmedian}</span> "
             f"<span class='nil'>({cn}; {cexcl} excl.)</span></td>"
+            f"<td class='r'><span style='font-weight:650'>{sval}</span> "
+            f"<span class='nil'>{e(snote) if sval != '—' else ''}</span></td>"
             f"<td class='r'>{unsold}</td><td class='r'>{usage.get(r.key, 0)}</td>"
             f"<td class='nil' style='font-size:12.5px;max-width:220px'>{e(r.notes)}</td></tr>"
         )
     return f"""
 <div class="head cathead" style="gap:10px"><div class="titles"><h1 class="page">Catalogue</h1>
-<div class="sub">{len(refs)} entries · unverified first, then by traffic</div></div>
+<div class="sub">{len(refs)} entries · unverified first, then by traffic</div>
+<div class="sub">Suggested FMV is the confident-only median of sold auctions — display only. Closings mix conditions; FMV is valued as MINT.</div></div>
 <div class="two"><form method="post" action="/reload"><button class="btn ghost">reload catalogue</button></form>
 <form method="post" action="/rescore"><button class="btn" style="font-size:13px;font-weight:650">re-score everything</button></form></div></div>
 <div class="list tight catcards">{"".join(cards)}</div>
@@ -1003,6 +1017,7 @@ def render_catalogue(engine: Engine) -> str:
 <thead><tr><th>Ver.</th><th>Reference</th><th>Key</th><th class="r">FMV</th><th>Band</th>
 <th class="r" title="Median closing price of auctions eBay reports as sold, with the count; a dash below the minimum count">Observed</th>
 <th class="r" title="Median of sold closings the shadow models confidently identified as this entry — both agreeing at high confidence, or the one that answered. In brackets: how many, and how many of the Observed closings it left out.">Confident</th>
+<th class="r" title="The confident-only median once it has enough sales, with the count and its difference from the current FMV. Display only: edit catalogue.toml by hand. Closing prices mix conditions, while FMV is valued as MINT.">Suggested</th>
 <th class="r" title="Auctions that ended without a sale: no bids, or reserve not met">Unsold</th>
 <th class="r">Priced</th><th>Notes</th></tr></thead>
 <tbody>{"".join(trs)}</tbody></table></div></div>"""

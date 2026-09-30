@@ -391,6 +391,11 @@ confident only** is the same median over the sold closings the shadow models
 identified as that entry at close — both `high` and agreeing, or the one that
 answered if only one did — with its count and how many of the Observed
 closings it left out. It reads stored answers; nothing calls a model.
+Once that median has `OBSERVED_MIN_AUCTIONS` sales behind it, it is shown as
+a **Suggested FMV** with the count and its difference from the current FMV.
+Display only — `catalogue.toml` is still edited by hand, and nothing reads
+the suggestion back. Closing prices mix conditions and FMV is valued as MINT,
+so a suggestion below FMV is expected; the page says so.
 
 The dashboard is an installable PWA: `/manifest.json` (linked with
 `crossorigin="use-credentials"` so the fetch carries the Access cookie), icons

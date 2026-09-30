@@ -54,7 +54,10 @@ class TestRule(unittest.TestCase):
         self.assertIsNone(median_pence([]))
 
 
-class TestFromStorage(unittest.TestCase):
+class StorageCase(unittest.TestCase):
+    """A database with an Engine, and a helper to store a closing with its
+    closing-stage answers. No tests of its own."""
+
     def setUp(self):
         from .db import Database
         from .poller import Engine
@@ -81,6 +84,8 @@ class TestFromStorage(unittest.TestCase):
                 escalated_from=None, would_verdict=None, would_mab=None, would_reason="",
             )
 
+
+class TestFromStorage(StorageCase):
     def test_median_count_and_excluded(self):
         both = [(HAIKU, PM, "high"), (GEMINI, PM, "high")]
         self.closing("a", 30_000, both)
