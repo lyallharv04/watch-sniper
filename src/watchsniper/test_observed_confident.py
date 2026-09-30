@@ -70,17 +70,21 @@ class StorageCase(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
-    def closing(self, item_id, price, answers, *, title=TITLE, sold=True):
-        lst = listing(item_id=item_id, title=title, is_auction=True)
+    def closing(self, item_id, price, answers, *, title=TITLE, sold=True,
+                condition_raw="Pre-owned"):
+        """`answers` are (model, key, confidence) or (..., condition)."""
+        lst = listing(item_id=item_id, title=title, is_auction=True,
+                      condition_raw=condition_raw)
         self.db.upsert_listing(lst)
         self.engine.score(lst)
         self.db.save_closing(item_id, price, 5, sold)
         inp = LlmInput(item_id, title, "", (), "", (), (Candidate(PM, "Tissot", "PRX"),))
-        for model, key, confidence in answers:
+        for model, key, confidence, *condition in answers:
             self.db.save_llm_result(
                 item_id=item_id, stage="closing", inp=inp,
                 result=LlmResult(provider="x", model=model, ok=True,
-                                 catalogue_key=key, confidence=confidence),
+                                 catalogue_key=key, confidence=confidence,
+                                 condition=condition[0] if condition else None),
                 escalated_from=None, would_verdict=None, would_mab=None, would_reason="",
             )
 

@@ -530,8 +530,10 @@ class Database:
         reference the rules gave it. Blacklist rejections are left out, as
         for the Observed column."""
         return self.query(
-            "SELECT c.item_id, c.final_price_pence, v.catalogue_key FROM closings c"
+            "SELECT c.item_id, c.final_price_pence, v.catalogue_key,"
+            " l.condition_raw, l.condition_id FROM closings c"
             " JOIN verdicts v ON v.item_id = c.item_id"
+            " JOIN listings l ON l.item_id = c.item_id"
             " WHERE c.sold = 1 AND c.final_price_pence IS NOT NULL"
             " AND v.verdict <> 'REJECT_BLACKLIST'"
         )
@@ -539,8 +541,8 @@ class Database:
     def closing_answers(self) -> list[sqlite3.Row]:
         """Successful model answers from the closing stage, oldest first."""
         return self.query(
-            "SELECT item_id, model, catalogue_key, confidence FROM llm_results"
-            " WHERE stage = 'closing' AND ok = 1 ORDER BY id"
+            "SELECT item_id, model, catalogue_key, confidence, condition"
+            " FROM llm_results WHERE stage = 'closing' AND ok = 1 ORDER BY id"
         )
 
     def unmatched_titles(self) -> list[str]:

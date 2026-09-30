@@ -99,6 +99,12 @@ def mul_bp(pence: Pence, bp: int) -> Pence:
     return (pence * bp) // 10_000
 
 
+def div_bp(pence: Pence, bp: int) -> Pence:
+    """pence / (bp / 10_000), rounded *down*: a value with a multiplier taken
+    back out, such as the FMV a sale price implies at a condition grade."""
+    return (pence * 10_000) // bp
+
+
 def mul_bp_ceil(pence: Pence, bp: int) -> Pence:
     """pence x (bp / 10_000), rounded *up*. Use for costs, fees and profit."""
     return -((-pence * bp) // 10_000)

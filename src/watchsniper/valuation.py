@@ -78,20 +78,33 @@ _BRACELET_PATTERNS = (
 
 
 def read_condition(listing: Listing) -> str | None:
-    """The condition grade, or None when the listing does not settle it.
+    """The condition grade, or None when the listing does not settle it."""
+    return grade_of(listing.condition_raw, listing.condition_id)
+
+
+def grade_of(condition_raw: str, condition_id: str) -> str | None:
+    """The condition grade from eBay's condition string and id, or None.
 
     The condition *string* is consulted first, because eBay qualifies the
     generic "Pre-owned" id with a grade there and the id on its own throws that
     away. Falling back to the id keeps the mapping working where the string is
     absent or in an unexpected form.
     """
-    text = listing.condition_raw.lower()
+    text = (condition_raw or "").lower()
     for needle, grade in _CONDITION_BY_TEXT:
         if needle in text:
             return grade
     if text.startswith("new"):
         return "MINT"
-    return _CONDITION_BY_ID.get(listing.condition_id)
+    return _CONDITION_BY_ID.get(condition_id or "")
+
+
+def lower_grade(stated: str | None, model: str | None) -> str | None:
+    """The lower of eBay's stated grade and a model's reading — the rule
+    wherever a model's condition meets money, so a model can only ever lower
+    a value. None when neither gives one; the caller then assumes GOOD."""
+    grades = [g for g in (stated, model) if g in C.COND_MULT]
+    return min(grades, key=lambda g: C.COND_MULT[g]) if grades else None
 
 
 def _first_match(text: str, patterns) -> str | None:
@@ -301,9 +314,7 @@ class Valuer:
         if hard_hits(hits) or not seller.passed:
             return None, None, "Not a candidate under the current rules."
 
-        stated = read_condition(listing)
-        grades = [g for g in (stated, condition) if g in C.COND_MULT]
-        grade = min(grades, key=lambda g: C.COND_MULT[g]) if grades else None
+        grade = lower_grade(read_condition(listing), condition)
         mab = self.max_bid_for(listing, ref, grade).amount
         price, _ = self._effective_price(listing)
         if price is None:

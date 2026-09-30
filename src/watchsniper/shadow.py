@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import traceback
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from . import config as C
 from .details import ItemDetails, download_image, sized_image_url
@@ -30,6 +31,8 @@ from .llm import (
     candidate_hash,
 )
 from .models import Listing
+from .money import div_bp, median_pence
+from .valuation import grade_of, lower_grade
 
 
 def llm_input(
@@ -237,18 +240,66 @@ def confident_key(answers: list, models: tuple[str, ...]) -> str | None:
     `high`. Anything else — a disagreement, a lower confidence, a null — is
     no confident identification. The escalation model has no say.
     """
+    return confident_answer(answers, models)[0]
+
+
+def confident_answer(answers: list, models: tuple[str, ...]) -> tuple[str | None, str | None]:
+    """(entry, the models' condition reading) under the confident_key rule.
+    Where the counting answers read the condition differently, the lower
+    reading is the one returned."""
     latest = {}
     for a in answers:
         if a["model"] in models:
             latest[a["model"]] = a
     if not latest:
-        return None
+        return None, None
     keys = {a["catalogue_key"] for a in latest.values()}
     if len(keys) != 1 or None in keys:
-        return None
+        return None, None
     if any(a["confidence"] != "high" for a in latest.values()):
+        return None, None
+    reading = None
+    for a in latest.values():
+        reading = lower_grade(reading, _get(a, "condition"))
+    return keys.pop(), reading
+
+
+def _get(row, name):
+    try:
+        return row[name]
+    except (KeyError, IndexError):
         return None
-    return keys.pop()
+
+
+@dataclass(frozen=True)
+class ConfidentClosing:
+    """One sold auction the shadow models confidently identified.
+    `grade` is the lower of eBay's stated grade and the models' reading;
+    `assumed` is true when neither gave one and GOOD was assumed."""
+
+    key: str
+    price: int
+    grade: str
+    assumed: bool
+
+
+def confident_closings(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
+    """(confident closings, per-entry count of Observed closings left out).
+    Reads stored answers only; no model is called."""
+    answers: dict[str, list] = {}
+    for a in db.closing_answers():
+        answers.setdefault(a["item_id"], []).append(a)
+    found: list[ConfidentClosing] = []
+    excluded: dict[str, int] = {}
+    for c in db.sold_closings():
+        key, reading = confident_answer(answers.get(c["item_id"], []), models)
+        if key:
+            grade = lower_grade(grade_of(c["condition_raw"], c["condition_id"]), reading)
+            found.append(ConfidentClosing(key, c["final_price_pence"], grade or "GOOD", grade is None))
+        rules = c["catalogue_key"]
+        if rules and key != rules:
+            excluded[rules] = excluded.get(rules, 0) + 1
+    return found, excluded
 
 
 def confident_observed(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
@@ -261,20 +312,10 @@ def confident_observed(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
     closing can count towards an entry the rules did not give it. Reads
     stored answers only; no model is called.
     """
-    from .money import median_pence
-
-    answers: dict[str, list] = {}
-    for a in db.closing_answers():
-        answers.setdefault(a["item_id"], []).append(a)
+    found, excluded = confident_closings(db, models)
     prices: dict[str, list[int]] = {}
-    excluded: dict[str, int] = {}
-    for c in db.sold_closings():
-        key = confident_key(answers.get(c["item_id"], []), models)
-        if key:
-            prices.setdefault(key, []).append(c["final_price_pence"])
-        rules = c["catalogue_key"]
-        if rules and key != rules:
-            excluded[rules] = excluded.get(rules, 0) + 1
+    for c in found:
+        prices.setdefault(c.key, []).append(c.price)
     return {
         key: (median_pence(prices.get(key, [])), len(prices.get(key, [])),
               excluded.get(key, 0))
@@ -282,22 +323,59 @@ def confident_observed(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
     }
 
 
-def suggested_fmvs(catalogue, confident: dict) -> dict[str, tuple[int, int, int]]:
-    """Per catalogue entry with at least OBSERVED_MIN_AUCTIONS confident
-    sales: (suggested FMV, sales behind it, difference from the current FMV
-    point in basis points of it, signed, truncated towards zero).
+@dataclass(frozen=True)
+class GradeSpread:
+    grade: str
+    median: int  # implied FMV, pence
+    n: int
+    assumed: int  # of n, how many had no grade and were taken as GOOD
 
-    The suggestion is the confident-only median. Display only: the
-    catalogue is edited by hand and nothing reads this back.
+
+@dataclass(frozen=True)
+class Suggestion:
+    value: int | None  # None until there are OBSERVED_MIN_AUCTIONS sales
+    n: int
+    diff_bp: int | None  # signed, of the current FMV point, towards zero
+    by_grade: tuple[GradeSpread, ...]
+
+
+def suggested_fmvs(catalogue, closings: list[ConfidentClosing]) -> dict[str, Suggestion]:
+    """Per catalogue entry with confident sales: the FMV they imply.
+
+    FMV is valued as MINT, and a sale at another grade is the FMV times that
+    grade's COND_MULT. So each sale implies FMV = price / COND_MULT[grade],
+    with the grade the lower of eBay's and the models' — the valuation's own
+    rule — rounded down as money.py rounds a value. The suggestion is the
+    median of those, once OBSERVED_MIN_AUCTIONS sales stand behind it; the
+    spread by grade is always given, so a multiplier that is off shows as one
+    grade sitting apart. A FOR_PARTS sale implies nothing (its multiplier is
+    zero) and is left out. Display only: nothing reads this back.
     """
+    implied: dict[str, list[tuple[str, bool, int]]] = {}
+    for c in closings:
+        mult = C.COND_MULT.get(c.grade, 0)
+        if mult > 0:
+            implied.setdefault(c.key, []).append((c.grade, c.assumed, div_bp(c.price, mult)))
     out = {}
     for ref in catalogue.references:
-        median, n, _ = confident.get(ref.key, (None, 0, 0))
-        if median is None or n < C.OBSERVED_MIN_AUCTIONS or not ref.point:
+        rows = implied.get(ref.key)
+        if not rows:
             continue
-        delta = median - ref.point
-        bp = abs(delta) * 10_000 // ref.point
-        out[ref.key] = (median, n, bp if delta >= 0 else -bp)
+        spread = []
+        for grade in sorted(C.COND_MULT, key=lambda g: -C.COND_MULT[g]):
+            values = [v for g, _, v in rows if g == grade]
+            if values:
+                spread.append(GradeSpread(
+                    grade, median_pence(values), len(values),
+                    sum(1 for g, a, _ in rows if g == grade and a),
+                ))
+        value = median_pence([v for _, _, v in rows]) if len(rows) >= C.OBSERVED_MIN_AUCTIONS else None
+        diff = None
+        if value is not None and ref.point:
+            delta = value - ref.point
+            bp = abs(delta) * 10_000 // ref.point
+            diff = bp if delta >= 0 else -bp
+        out[ref.key] = Suggestion(value, len(rows), diff, tuple(spread))
     return out
 
 
