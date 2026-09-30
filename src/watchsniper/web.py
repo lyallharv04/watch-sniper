@@ -219,6 +219,7 @@ background:var(--sf);border-radius:16px;padding:8px 10px}
 .cstrip .lbl{font-size:10px}
 .cstrip b{font-size:14.5px;font-weight:750;font-variant-numeric:tabular-nums}
 .cstrip small{font-size:10.5px;color:var(--mute)}
+.cstrip.two{grid-template-columns:1fr}
 .band{font-size:12.5px;color:var(--accInk);line-height:1.35}
 .notes{font-size:12.5px;color:var(--mute);line-height:1.35}
 .cattable{display:none}
@@ -939,8 +940,11 @@ def render_missing(engine: Engine) -> str:
 
 
 def render_catalogue(engine: Engine) -> str:
+    from .shadow import confident_observed
+
     usage = engine.db.catalogue_usage()
     observed = engine.db.observed_closings()
+    confident = confident_observed(engine.db)
     refs = sorted(
         engine.catalogue.references,
         key=lambda r: (r.verified, -usage.get(r.key, 0), r.brand),
@@ -951,6 +955,12 @@ def render_catalogue(engine: Engine) -> str:
         shown = n >= C.OBSERVED_MIN_AUCTIONS
         return (fmt(median) if shown else "—"), n, shown, unsold
 
+    def conf(key: str):
+        """The confident-only median, shown from the same minimum count."""
+        median, n, excluded = confident.get(key, (None, 0, 0))
+        shown = n >= C.OBSERVED_MIN_AUCTIONS
+        return (fmt(median) if shown else "—"), n, shown, excluded
+
     def band(r) -> str:
         return f"{fmt(r.fmv_low)}–{fmt(r.fmv_high)} · valued at midpoint" if r.is_band else ""
 
@@ -958,6 +968,8 @@ def render_catalogue(engine: Engine) -> str:
     for r in refs:
         median, n, shown, unsold = obs(r.key)
         sold_note = f"{n} sold" if shown else f"fewer than {C.OBSERVED_MIN_AUCTIONS} sold"
+        cmedian, cn, cshown, cexcl = conf(r.key)
+        conf_note = (f"{cn} sold" if cshown else f"{cn} of {C.OBSERVED_MIN_AUCTIONS} needed") + f" · {cexcl} excluded"
         ver = '<span class="ver ok">✓ verified</span>' if r.verified else '<span class="ver">— unverified</span>'
         cards.append(f"""<div class="card cat">
 <div class="cattop"><div><span class="ref">{e(r.display)}</span><span class="key">{e(r.key)}</span></div>{ver}</div>
@@ -965,6 +977,7 @@ def render_catalogue(engine: Engine) -> str:
 <div><span class="lbl">Observed</span><b>{median}</b><small>{sold_note}</small></div>
 <div><span class="lbl">Unsold</span><b>{unsold}</b></div>
 <div><span class="lbl">Priced</span><b>{usage.get(r.key, 0)}</b></div></div>
+<div class="cstrip two"><div><span class="lbl">Observed, confident only</span><b>{cmedian}</b><small>{conf_note}</small></div></div>
 {f'<div class="band">Band: {band(r)}</div>' if r.is_band else ''}
 {f'<div class="notes">{e(r.notes)}</div>' if r.notes else ''}</div>""")
         trs.append(
@@ -975,6 +988,8 @@ def render_catalogue(engine: Engine) -> str:
             f"<td class='accent' style='font-size:12.5px;max-width:190px'>{band(r)}</td>"
             f"<td class='r'><span style='font-weight:650'>{median}</span> "
             f"<span class='nil'>{f'({n})' if shown else ''}</span></td>"
+            f"<td class='r'><span style='font-weight:650'>{cmedian}</span> "
+            f"<span class='nil'>({cn}; {cexcl} excl.)</span></td>"
             f"<td class='r'>{unsold}</td><td class='r'>{usage.get(r.key, 0)}</td>"
             f"<td class='nil' style='font-size:12.5px;max-width:220px'>{e(r.notes)}</td></tr>"
         )
@@ -987,6 +1002,7 @@ def render_catalogue(engine: Engine) -> str:
 <div class="cattable"><div class="tablecard"><table>
 <thead><tr><th>Ver.</th><th>Reference</th><th>Key</th><th class="r">FMV</th><th>Band</th>
 <th class="r" title="Median closing price of auctions eBay reports as sold, with the count; a dash below the minimum count">Observed</th>
+<th class="r" title="Median of sold closings the shadow models confidently identified as this entry — both agreeing at high confidence, or the one that answered. In brackets: how many, and how many of the Observed closings it left out.">Confident</th>
 <th class="r" title="Auctions that ended without a sale: no bids, or reserve not met">Unsold</th>
 <th class="r">Priced</th><th>Notes</th></tr></thead>
 <tbody>{"".join(trs)}</tbody></table></div></div>"""

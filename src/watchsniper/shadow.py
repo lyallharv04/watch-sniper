@@ -229,6 +229,59 @@ def veto_from(rows, models: tuple[str, ...]) -> list[dict] | None:
     return None
 
 
+def confident_key(answers: list, models: tuple[str, ...]) -> str | None:
+    """The catalogue entry the shadow models confidently say an auction was.
+
+    Each model's latest answer counts. Where both answered, both must be
+    `high` and name the same entry; where only one answered, that one must be
+    `high`. Anything else — a disagreement, a lower confidence, a null — is
+    no confident identification. The escalation model has no say.
+    """
+    latest = {}
+    for a in answers:
+        if a["model"] in models:
+            latest[a["model"]] = a
+    if not latest:
+        return None
+    keys = {a["catalogue_key"] for a in latest.values()}
+    if len(keys) != 1 or None in keys:
+        return None
+    if any(a["confidence"] != "high" for a in latest.values()):
+        return None
+    return keys.pop()
+
+
+def confident_observed(db, models: tuple[str, ...] = C.LLM_SHADOW_MODELS):
+    """Per catalogue entry: (median, count, excluded) of sold auction
+    closings the shadow models confidently identified as that entry.
+
+    `excluded` counts the closings the existing Observed column counts for
+    the entry — the rules gave it that reference — that are not confidently
+    identified as it: unasked, unsure, or identified as something else. A
+    closing can count towards an entry the rules did not give it. Reads
+    stored answers only; no model is called.
+    """
+    from .money import median_pence
+
+    answers: dict[str, list] = {}
+    for a in db.closing_answers():
+        answers.setdefault(a["item_id"], []).append(a)
+    prices: dict[str, list[int]] = {}
+    excluded: dict[str, int] = {}
+    for c in db.sold_closings():
+        key = confident_key(answers.get(c["item_id"], []), models)
+        if key:
+            prices.setdefault(key, []).append(c["final_price_pence"])
+        rules = c["catalogue_key"]
+        if rules and key != rules:
+            excluded[rules] = excluded.get(rules, 0) + 1
+    return {
+        key: (median_pence(prices.get(key, [])), len(prices.get(key, [])),
+              excluded.get(key, 0))
+        for key in prices.keys() | excluded.keys()
+    }
+
+
 def recompute_vetoes(engine) -> int:
     """Re-derive every veto from stored answers, after recompute_would."""
     from .db import listing_from_row

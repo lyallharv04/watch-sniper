@@ -19,6 +19,7 @@ from typing import Any
 
 from .details import ItemDetails
 from .models import Listing, parse_ts, utcnow
+from .money import median_pence
 from .valuation import Assessment
 
 SCHEMA = """
@@ -518,18 +519,29 @@ class Database:
                 unsold[key] = unsold.get(key, 0) + 1
             elif r["final_price_pence"] is not None:
                 prices.setdefault(key, []).append(r["final_price_pence"])
-        out: dict[str, tuple[int | None, int, int]] = {}
-        for key in prices.keys() | unsold.keys():
-            values = sorted(prices.get(key, []))
-            mid = len(values) // 2
-            if not values:
-                median = None
-            elif len(values) % 2:
-                median = values[mid]
-            else:
-                median = (values[mid - 1] + values[mid]) // 2
-            out[key] = (median, len(values), unsold.get(key, 0))
-        return out
+        return {
+            key: (median_pence(prices.get(key, [])), len(prices.get(key, [])),
+                  unsold.get(key, 0))
+            for key in prices.keys() | unsold.keys()
+        }
+
+    def sold_closings(self) -> list[sqlite3.Row]:
+        """Every auction eBay reports as sold with a GBP price, with the
+        reference the rules gave it. Blacklist rejections are left out, as
+        for the Observed column."""
+        return self.query(
+            "SELECT c.item_id, c.final_price_pence, v.catalogue_key FROM closings c"
+            " JOIN verdicts v ON v.item_id = c.item_id"
+            " WHERE c.sold = 1 AND c.final_price_pence IS NOT NULL"
+            " AND v.verdict <> 'REJECT_BLACKLIST'"
+        )
+
+    def closing_answers(self) -> list[sqlite3.Row]:
+        """Successful model answers from the closing stage, oldest first."""
+        return self.query(
+            "SELECT item_id, model, catalogue_key, confidence FROM llm_results"
+            " WHERE stage = 'closing' AND ok = 1 ORDER BY id"
+        )
 
     def unmatched_titles(self) -> list[str]:
         return [

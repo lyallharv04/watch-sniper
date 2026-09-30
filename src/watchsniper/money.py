@@ -81,6 +81,19 @@ def fmt_usd_micro(micro: int | None) -> str:
     return f"${micro // 1_000_000}.{micro % 1_000_000 // 1_000:03d}"
 
 
+def median_pence(values: list[Pence]) -> Pence | None:
+    """The median of some prices; the lower-rounded mean of the middle two
+    for an even count, so it rounds down like every other value. None for
+    none."""
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) // 2
+
+
 def mul_bp(pence: Pence, bp: int) -> Pence:
     """pence x (bp / 10_000), rounded *down*. Use for value and income."""
     return (pence * bp) // 10_000

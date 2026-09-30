@@ -386,7 +386,11 @@ are cards throughout.
 The Catalogue page's **Observed** column is the median closing price of sold
 auctions per entry, with the count behind it, blank below
 `OBSERVED_MIN_AUCTIONS`; **Unsold** counts auctions that ended without a sale.
-Blacklist-rejected listings are excluded from both.
+Blacklist-rejected listings are excluded from both. Beside it, **Observed,
+confident only** is the same median over the sold closings the shadow models
+identified as that entry at close — both `high` and agreeing, or the one that
+answered if only one did — with its count and how many of the Observed
+closings it left out. It reads stored answers; nothing calls a model.
 
 The dashboard is an installable PWA: `/manifest.json` (linked with
 `crossorigin="use-credentials"` so the fetch carries the Access cookie), icons
